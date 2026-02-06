@@ -17,6 +17,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
+    "test": "vitest run",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -24,13 +25,21 @@
     "knowledge-graph",
     "coding-agent",
     "persistent-memory",
-    "opencode"
+    "opencode",
+    "llm",
+    "sqlite",
+    "embeddings",
+    "ai"
   ],
-  "author": "Kevin",
+  "author": "Kevin <https://github.com/0xk3vin>",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/anomalyco/megamemory.git"
+  },
+  "homepage": "https://github.com/anomalyco/megamemory#readme",
+  "bugs": {
+    "url": "https://github.com/anomalyco/megamemory/issues"
   },
   "engines": {
     "node": ">=18"
@@ -46,6 +55,7 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^20.17.14",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
   }
 }

@@ -1,5 +1,9 @@
 # megamemory
 
+[![npm version](https://img.shields.io/npm/v/megamemory)](https://www.npmjs.com/package/megamemory)
+[![license](https://img.shields.io/npm/l/megamemory)](./LICENSE)
+[![node](https://img.shields.io/node/v/megamemory)](https://nodejs.org)
+
 Persistent project knowledge graph for coding agents. An MCP server that lets your agent build and query a graph of concepts, architecture, and decisions — so it remembers across sessions.
 
 ## How it works

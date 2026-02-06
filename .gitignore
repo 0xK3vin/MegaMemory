@@ -3,4 +3,6 @@ dist/
 .megamemory/
 .osgrep/
 *.db
-.osgrep
+*.tgz
+*.log
+.env*

@@ -63,6 +63,13 @@
   #search:focus { border-color: var(--accent); }
   #search::placeholder { color: var(--text-muted); }
 
+  .version {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+
   main {
     flex: 1;
     display: flex;
@@ -70,7 +77,20 @@
     position: relative;
   }
 
-  #graph { flex: 1; background: var(--bg); }
+  #graph {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    background-color: var(--bg);
+    /* Grid layers: 1) small dots, 2) vertical major lines, 3) horizontal major lines */
+    background-image:
+      radial-gradient(circle, #1e2230 1px, transparent 1px),
+      linear-gradient(to right, #181c28 1px, transparent 1px),
+      linear-gradient(to bottom, #181c28 1px, transparent 1px);
+    /* Defaults — overwritten by JS on viewport changes */
+    background-size: 20px 20px, 100px 100px, 100px 100px;
+    background-position: 0 0, 0 0, 0 0;
+  }
 
   /* ---- Panel ---- */
   #panel {
@@ -232,8 +252,9 @@
 <body>
 
 <header>
-  <span class="logo">megamemory</span>
+  <span class="logo">MegaMemory</span>
   <input id="search" type="text" placeholder="Search concepts..." />
+  <span class="version">v{{VERSION}}</span>
 </header>
 
 <main>
@@ -456,6 +477,29 @@ const STYLE = [
   },
 ];
 
+// ---- Grid background (moves with pan/zoom) ----
+
+const GRID_SMALL = 20;   // dot spacing in graph-space pixels
+const GRID_MAJOR = 100;  // major crosshair line spacing
+
+function updateGrid() {
+  if (!cy) return;
+  const zoom = cy.zoom();
+  const pan = cy.pan();
+
+  const smallSize = GRID_SMALL * zoom;
+  const majorSize = GRID_MAJOR * zoom;
+
+  const ox = pan.x % smallSize;
+  const oy = pan.y % smallSize;
+  const mx = pan.x % majorSize;
+  const my = pan.y % majorSize;
+
+  const el = cy.container();
+  el.style.backgroundSize = `${smallSize}px ${smallSize}px, ${majorSize}px ${majorSize}px, ${majorSize}px ${majorSize}px`;
+  el.style.backgroundPosition = `${ox}px ${oy}px, ${mx}px ${my}px, ${mx}px ${my}px`;
+}
+
 // ---- Init graph ----
 
 function initCytoscape(elements, data) {
@@ -493,6 +537,11 @@ function initCytoscape(elements, data) {
     maxZoom: 5,
     wheelSensitivity: 0.3,
   });
+
+  // Update grid on every viewport change (pan, zoom, resize)
+  cy.on('viewport', updateGrid);
+  cy.on('layoutstop', updateGrid);
+  updateGrid();
 
   // Click node → panel
   cy.on('tap', 'node', async function(evt) {

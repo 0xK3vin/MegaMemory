@@ -17,7 +17,7 @@ import type {
  * Generate a slug ID from a name, optionally prefixed with parent ID.
  * Converts underscores and spaces to hyphens, lowercases, strips non-alphanumeric.
  */
-function makeId(name: string, parentId?: string): string {
+export function makeId(name: string, parentId?: string): string {
   const normalized = name
     .toLowerCase()
     .replace(/[_\s]+/g, "-")          // underscores/spaces → hyphens
