@@ -3,6 +3,8 @@
 import { readFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import pc from "picocolors";
+import { errorBold, validatePort } from "./cli-utils.js";
 
 // ---- CLI routing ----
 
@@ -14,31 +16,31 @@ const VERSION = JSON.parse(
 ).version;
 
 const HELP = `
-megamemory v${VERSION} — persistent project knowledge graph for coding agents
+${pc.bold(pc.cyan("megamemory"))} ${pc.green(`v${VERSION}`)} ${pc.dim("— persistent project knowledge graph for coding agents")}
 
-Commands:
-  (no command)    Start the MCP stdio server (invoked by opencode)
-  init            Configure opencode integration
-  serve           Start the web graph explorer
+${pc.bold("Commands:")}
+  ${pc.cyan("(no command)")}    Start the MCP stdio server ${pc.dim("(invoked by your editor)")}
+  ${pc.cyan("init")}            Configure opencode integration
+  ${pc.cyan("serve")}           Start the web graph explorer
 
-Options:
-  --port PORT     Port for the web explorer (default: 4321)
-  --help, -h      Show this help
-  --version, -v   Show version
+${pc.bold("Options:")}
+  ${pc.cyan("--port")} ${pc.dim("PORT")}     Port for the web explorer ${pc.dim("(default: 4321)")}
+  ${pc.cyan("--help, -h")}      Show this help
+  ${pc.cyan("--version, -v")}   Show version
 
-Examples:
-  megamemory init                Setup opencode config, plugins, and commands
-  megamemory serve               Open graph explorer at http://localhost:4321
-  megamemory serve --port 8080   Custom port
+${pc.bold("Examples:")}
+  ${pc.dim("$")} megamemory init                ${pc.dim("Setup opencode config, plugins, and commands")}
+  ${pc.dim("$")} megamemory serve               ${pc.dim(`Open graph explorer at ${pc.underline("http://localhost:4321")}`)}
+  ${pc.dim("$")} megamemory serve --port 8080   ${pc.dim("Custom port")}
 `.trim();
 
-function parseFlags(args: string[]): { port?: number } {
+const KNOWN_COMMANDS = new Set(["init", "serve", "--help", "-h", "--version", "-v"]);
+
+function parseFlags(args: string[]): { port?: number; rawPort?: string } {
   const portIdx = args.indexOf("--port");
-  const port =
-    portIdx !== -1 && args[portIdx + 1]
-      ? parseInt(args[portIdx + 1], 10)
-      : undefined;
-  return { port };
+  const rawPort = portIdx !== -1 && args[portIdx + 1] ? args[portIdx + 1] : undefined;
+  const port = rawPort ? parseInt(rawPort, 10) : undefined;
+  return { port, rawPort };
 }
 
 const cmd = process.argv[2];
@@ -53,8 +55,16 @@ switch (cmd) {
 
   case "serve": {
     const flags = parseFlags(process.argv.slice(3));
+    const port = flags.port ?? 4321;
+
+    const portError = validatePort(port, flags.rawPort);
+    if (portError) {
+      errorBold(portError);
+      process.exit(1);
+    }
+
     const { runServe } = await import("./web.js");
-    runServe(flags.port ?? 4321);
+    await runServe(port);
     break;
   }
 
@@ -66,12 +76,18 @@ switch (cmd) {
 
   case "--version":
   case "-v":
-    console.log(VERSION);
+    console.log(`${pc.bold("megamemory")} ${pc.green(`v${VERSION}`)}`);
     process.exit(0);
     break;
 
   default:
-    // No command or unknown → start MCP server
+    if (cmd && !KNOWN_COMMANDS.has(cmd)) {
+      // User typed an unknown command — don't silently start MCP
+      errorBold(`Unknown command '${cmd}'.`);
+      console.log(pc.dim(`  Run ${pc.cyan("megamemory --help")} for usage.\n`));
+      process.exit(1);
+    }
+    // No command → start MCP server (normal invocation by editor)
     await startMcpServer();
     break;
 }

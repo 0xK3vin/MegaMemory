@@ -1,12 +1,22 @@
 import http from "http";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+import pc from "picocolors";
 import { KnowledgeDB } from "./db.js";
 import { buildNodeWithContext } from "./tools.js";
+import { errorBold, askPort } from "./cli-utils.js";
 import type { NodeRow } from "./types.js";
 
+const VERSION = JSON.parse(
+  fs.readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"),
+    "utf-8"
+  )
+).version;
+
 function resolveHtmlPath(): string {
-  const thisDir = path.dirname(new URL(import.meta.url).pathname);
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
   // From dist/ → ../web/index.html
   const fromDist = path.resolve(thisDir, "..", "web", "index.html");
   if (fs.existsSync(fromDist)) return fromDist;
@@ -41,15 +51,71 @@ function parseFileRefs(raw: string | null): string[] | null {
   }
 }
 
-export function runServe(port: number): void {
+function printBanner(port: number, dbPath: string): void {
+  console.log();
+  console.log(`  ${pc.bold(pc.cyan("megamemory"))} ${pc.green(`v${VERSION}`)} ${pc.dim("explorer")}`);
+  console.log();
+  console.log(`  ${pc.dim("➜")}  ${pc.bold("Local:")}   ${pc.cyan(pc.underline(`http://localhost:${port}`))}`);
+  console.log(`  ${pc.dim("➜")}  ${pc.bold("DB:")}      ${pc.dim(dbPath)}`);
+  console.log();
+  console.log("  Press Ctrl+C to stop.");
+  console.log();
+}
+
+/**
+ * Attempt to listen on the given port. If EADDRINUSE, prompt the user
+ * for an alternative port and retry. Returns a promise that resolves
+ * once the server is listening.
+ */
+function listenWithRetry(
+  server: http.Server,
+  port: number,
+  dbPath: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = async (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        server.removeListener("error", onError);
+        try {
+          const newPort = await askPort(port);
+          if (newPort === null) {
+            console.log(pc.dim("  Cancelled.\n"));
+            process.exit(0);
+          }
+          // Retry with the new port
+          resolve(listenWithRetry(server, newPort, dbPath));
+        } catch (promptErr) {
+          reject(promptErr);
+        }
+      } else if (err.code === "EACCES") {
+        errorBold(`Permission denied for port ${port}. Try a port above 1024.`);
+        process.exit(1);
+      } else {
+        reject(err);
+      }
+    };
+
+    server.once("error", onError);
+
+    server.listen(port, () => {
+      server.removeListener("error", onError);
+      printBanner(port, dbPath);
+      resolve();
+    });
+  });
+}
+
+export async function runServe(port: number): Promise<void> {
   const dbPath =
     process.env.MEGAMEMORY_DB_PATH ??
     path.join(process.cwd(), ".megamemory", "knowledge.db");
 
   if (!fs.existsSync(dbPath)) {
-    console.error(
-      `No database found at ${dbPath}\n` +
-        `Run megamemory in a project that has been used with the MCP server, or set MEGAMEMORY_DB_PATH.`
+    console.log();
+    errorBold(`No database found at ${pc.dim(dbPath)}`);
+    console.log(
+      pc.dim(`  Run megamemory in a project that has been used with the MCP server,\n`) +
+      pc.dim(`  or set ${pc.cyan("MEGAMEMORY_DB_PATH")} environment variable.\n`)
     );
     process.exit(1);
   }
@@ -58,11 +124,13 @@ export function runServe(port: number): void {
   const htmlPath = resolveHtmlPath();
 
   if (!fs.existsSync(htmlPath)) {
-    console.error(`HTML file not found at ${htmlPath}`);
+    console.log();
+    errorBold(`HTML file not found at ${pc.dim(htmlPath)}`);
+    console.log(pc.dim(`  This may indicate an incomplete installation. Try reinstalling megamemory.\n`));
     process.exit(1);
   }
 
-  const htmlContent = fs.readFileSync(htmlPath, "utf-8");
+  const htmlContent = fs.readFileSync(htmlPath, "utf-8").replaceAll("{{VERSION}}", VERSION);
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
@@ -135,14 +203,11 @@ export function runServe(port: number): void {
     notFound(res);
   });
 
-  server.listen(port, () => {
-    console.log(`megamemory explorer running at http://localhost:${port}`);
-    console.log(`Database: ${dbPath}`);
-    console.log(`Press Ctrl+C to stop.\n`);
-  });
+  await listenWithRetry(server, port, dbPath);
 
   // Graceful shutdown
   process.on("SIGINT", () => {
+    console.log(pc.dim("\n  Shutting down...\n"));
     server.close();
     db.close();
     process.exit(0);

@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+import pc from "picocolors";
+import { success, skip, error, info, heading } from "./cli-utils.js";
 
 // ---- Paths ----
 
@@ -31,10 +33,6 @@ Be specific in summaries: include parameter names, defaults, file locations, and
 `;
 
 // ---- Helpers ----
-
-function log(msg: string): void {
-  console.log(`  ${msg}`);
-}
 
 /**
  * Resolve absolute path to the MCP server entry point (dist/index.js).
@@ -86,7 +84,7 @@ async function setupMcpConfig(): Promise<void> {
     } catch {
       const backup = `${OPENCODE_CONFIG_PATH}.bak`;
       fs.copyFileSync(OPENCODE_CONFIG_PATH, backup);
-      log(`Backed up malformed config to ${backup}`);
+      info(`Backed up malformed config to ${pc.dim(backup)}`);
       config = {};
     }
   }
@@ -126,12 +124,12 @@ async function setupMcpConfig(): Promise<void> {
     JSON.stringify(config, null, 2) + "\n"
   );
 
-  log(
+  success(
     existed
-      ? `Updated megamemory MCP in ${OPENCODE_CONFIG_PATH}`
-      : `Added megamemory MCP to ${OPENCODE_CONFIG_PATH}`
+      ? `Updated megamemory MCP in ${pc.dim(OPENCODE_CONFIG_PATH)}`
+      : `Added megamemory MCP to ${pc.dim(OPENCODE_CONFIG_PATH)}`
   );
-  log(`  Command: ${JSON.stringify(command)}`);
+  info(`Command: ${pc.cyan(JSON.stringify(command))}`);
 }
 
 function setupAgentsMd(): void {
@@ -139,15 +137,15 @@ function setupAgentsMd(): void {
   if (fs.existsSync(OPENCODE_AGENTS_MD_PATH)) {
     const content = fs.readFileSync(OPENCODE_AGENTS_MD_PATH, "utf-8");
     if (content.includes(AGENTS_MD_MARKER)) {
-      log(`Already contains knowledge graph instructions — skipped`);
+      skip(`Already contains knowledge graph instructions`);
       return;
     }
     // Append to existing
     fs.appendFileSync(OPENCODE_AGENTS_MD_PATH, "\n" + AGENTS_MD_SNIPPET.trimStart());
-    log(`Appended knowledge graph instructions to ${OPENCODE_AGENTS_MD_PATH}`);
+    success(`Appended knowledge graph instructions to ${pc.dim(OPENCODE_AGENTS_MD_PATH)}`);
   } else {
     fs.writeFileSync(OPENCODE_AGENTS_MD_PATH, AGENTS_MD_SNIPPET.trimStart());
-    log(`Created ${OPENCODE_AGENTS_MD_PATH}`);
+    success(`Created ${pc.dim(OPENCODE_AGENTS_MD_PATH)}`);
   }
 }
 
@@ -156,7 +154,7 @@ function setupToolPlugin(): void {
   const dest = path.join(OPENCODE_TOOL_DIR, "megamemory.ts");
 
   if (!fs.existsSync(source)) {
-    log(`Plugin source not found at ${source} — skipped`);
+    skip(`Plugin source not found at ${pc.dim(source)}`);
     return;
   }
 
@@ -170,15 +168,15 @@ function setupToolPlugin(): void {
   if (fs.existsSync(dest)) {
     const existing = fs.readFileSync(dest, "utf-8");
     if (existing === sourceContent) {
-      log(`Tool plugin already up to date — skipped`);
+      skip(`Tool plugin already up to date`);
       return;
     }
     // Update
     fs.writeFileSync(dest, sourceContent);
-    log(`Updated tool plugin at ${dest}`);
+    success(`Updated tool plugin at ${pc.dim(dest)}`);
   } else {
     fs.writeFileSync(dest, sourceContent);
-    log(`Installed tool plugin at ${dest}`);
+    success(`Installed tool plugin at ${pc.dim(dest)}`);
   }
 }
 
@@ -187,7 +185,7 @@ function setupBootstrapCommand(): void {
   const dest = path.join(OPENCODE_COMMANDS_DIR, "bootstrap-memory.md");
 
   if (!fs.existsSync(source)) {
-    log(`Command source not found at ${source} — skipped`);
+    skip(`Command source not found at ${pc.dim(source)}`);
     return;
   }
 
@@ -200,36 +198,100 @@ function setupBootstrapCommand(): void {
   if (fs.existsSync(dest)) {
     const existing = fs.readFileSync(dest, "utf-8");
     if (existing === sourceContent) {
-      log(`Bootstrap command already up to date — skipped`);
+      skip(`Bootstrap command already up to date`);
       return;
     }
     fs.writeFileSync(dest, sourceContent);
-    log(`Updated bootstrap command at ${dest}`);
+    success(`Updated bootstrap command at ${pc.dim(dest)}`);
   } else {
     fs.writeFileSync(dest, sourceContent);
-    log(`Installed bootstrap command at ${dest}`);
+    success(`Installed bootstrap command at ${pc.dim(dest)}`);
   }
 }
 
 // ---- Entry point ----
 
+interface StepResult {
+  name: string;
+  ok: boolean;
+  error?: string;
+}
+
 export async function runInit(): Promise<void> {
-  console.log("\nmegamemory init\n");
+  console.log();
+  console.log(`  ${pc.bold(pc.cyan("megamemory"))} ${pc.dim("init")}`);
+  console.log();
 
-  console.log("1. MCP server config:");
-  await setupMcpConfig();
+  const steps: StepResult[] = [];
 
-  console.log("\n2. Global AGENTS.md:");
-  setupAgentsMd();
+  // Step 1: MCP server config
+  heading(`  1. MCP server config`);
+  try {
+    await setupMcpConfig();
+    steps.push({ name: "MCP server config", ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    error(`MCP config failed: ${msg}`);
+    steps.push({ name: "MCP server config", ok: false, error: msg });
+  }
 
-  console.log("\n3. Skill tool plugin:");
-  setupToolPlugin();
+  console.log();
 
-  console.log("\n4. Bootstrap command:");
-  setupBootstrapCommand();
+  // Step 2: Global AGENTS.md
+  heading(`  2. Global AGENTS.md`);
+  try {
+    setupAgentsMd();
+    steps.push({ name: "Global AGENTS.md", ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    error(`AGENTS.md setup failed: ${msg}`);
+    steps.push({ name: "Global AGENTS.md", ok: false, error: msg });
+  }
 
-  console.log(
-    "\nDone. Restart opencode to pick up changes." +
-    "\nRun /user:bootstrap-memory in any project to populate its knowledge graph.\n"
-  );
+  console.log();
+
+  // Step 3: Skill tool plugin
+  heading(`  3. Skill tool plugin`);
+  try {
+    setupToolPlugin();
+    steps.push({ name: "Skill tool plugin", ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    error(`Plugin setup failed: ${msg}`);
+    steps.push({ name: "Skill tool plugin", ok: false, error: msg });
+  }
+
+  console.log();
+
+  // Step 4: Bootstrap command
+  heading(`  4. Bootstrap command`);
+  try {
+    setupBootstrapCommand();
+    steps.push({ name: "Bootstrap command", ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    error(`Bootstrap command setup failed: ${msg}`);
+    steps.push({ name: "Bootstrap command", ok: false, error: msg });
+  }
+
+  console.log();
+
+  // Summary
+  const failed = steps.filter((s) => !s.ok);
+  if (failed.length === 0) {
+    console.log(`  ${pc.green(pc.bold("Done."))} Restart opencode to pick up changes.`);
+    console.log(
+      pc.dim(`  Run ${pc.cyan("/user:bootstrap-memory")} in any project to populate its knowledge graph.`)
+    );
+  } else {
+    console.log(
+      `  ${pc.yellow(pc.bold("Done with issues."))} ${pc.yellow(`${failed.length} step(s) failed:`)}`
+    );
+    for (const f of failed) {
+      console.log(`    ${pc.red("✗")} ${f.name}: ${pc.dim(f.error ?? "unknown error")}`);
+    }
+    console.log();
+    console.log(pc.dim(`  Steps that succeeded will still work. Fix the issues above and re-run.`));
+  }
+  console.log();
 }

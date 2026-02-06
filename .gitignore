@@ -3,3 +3,4 @@ dist/
 .megamemory/
 .osgrep/
 *.db
+.osgrep
