@@ -1,6 +1,6 @@
 {
   "name": "megamemory",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server that gives coding agents persistent project understanding via a knowledge graph",
   "type": "module",
   "main": "dist/index.js",
