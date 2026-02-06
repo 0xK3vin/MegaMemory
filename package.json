@@ -1,0 +1,50 @@
+{
+  "name": "megamemory",
+  "version": "1.0.0",
+  "description": "MCP server that gives coding agents persistent project understanding via a knowledge graph",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "megamemory": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "plugin/",
+    "commands/",
+    "web/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "knowledge-graph",
+    "coding-agent",
+    "persistent-memory",
+    "opencode"
+  ],
+  "author": "Kevin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anomalyco/megamemory.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@xenova/transformers": "^2.17.2",
+    "better-sqlite3": "^11.7.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^20.17.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
