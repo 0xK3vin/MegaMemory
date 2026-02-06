@@ -54,6 +54,7 @@ One command configures everything:
 - Workflow instructions in `~/.config/opencode/AGENTS.md`
 - Skill tool plugin at `~/.config/opencode/tool/megamemory.ts`
 - Bootstrap command `/user:bootstrap-memory` for initial graph population
+- Save command `/user:save-memory` to persist session knowledge
 
 Restart opencode after running init.
 
@@ -138,6 +139,7 @@ plugin/
   megamemory.ts  Opencode skill tool plugin
 commands/
   bootstrap-memory.md  /user command for initial population
+  save-memory.md       /user command to save session knowledge
 web/
   index.html     Single-file graph visualization (Cytoscape.js)
 ```

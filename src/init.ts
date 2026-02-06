@@ -66,11 +66,11 @@ function resolvePluginSource(): string {
 }
 
 /**
- * Resolve absolute path to the commands/bootstrap-memory.md file.
+ * Resolve absolute path to a file in the commands/ directory.
  */
-function resolveCommandSource(): string {
+function resolveCommandFile(filename: string): string {
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(thisDir, "..", "commands", "bootstrap-memory.md");
+  return path.resolve(thisDir, "..", "commands", filename);
 }
 
 // ---- Setup steps ----
@@ -187,9 +187,9 @@ function setupToolPlugin(): void {
   }
 }
 
-function setupBootstrapCommand(): void {
-  const source = resolveCommandSource();
-  const dest = path.join(OPENCODE_COMMANDS_DIR, "bootstrap-memory.md");
+function setupCommand(filename: string, label: string): void {
+  const source = resolveCommandFile(filename);
+  const dest = path.join(OPENCODE_COMMANDS_DIR, filename);
 
   if (!fs.existsSync(source)) {
     skip(`Command source not found at ${pc.dim(source)}`);
@@ -205,14 +205,14 @@ function setupBootstrapCommand(): void {
   if (fs.existsSync(dest)) {
     const existing = fs.readFileSync(dest, "utf-8");
     if (existing === sourceContent) {
-      skip(`Bootstrap command already up to date`);
+      skip(`${label} already up to date`);
       return;
     }
     fs.writeFileSync(dest, sourceContent);
-    success(`Updated bootstrap command at ${pc.dim(dest)}`);
+    success(`Updated ${label} at ${pc.dim(dest)}`);
   } else {
     fs.writeFileSync(dest, sourceContent);
-    success(`Installed bootstrap command at ${pc.dim(dest)}`);
+    success(`Installed ${label} at ${pc.dim(dest)}`);
   }
 }
 
@@ -273,7 +273,7 @@ export async function runInit(): Promise<void> {
   // Step 4: Bootstrap command
   heading(`  4. Bootstrap command`);
   try {
-    setupBootstrapCommand();
+    setupCommand("bootstrap-memory.md", "bootstrap command");
     steps.push({ name: "Bootstrap command", ok: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -283,12 +283,28 @@ export async function runInit(): Promise<void> {
 
   console.log();
 
+  // Step 5: Save memory command
+  heading(`  5. Save memory command`);
+  try {
+    setupCommand("save-memory.md", "save memory command");
+    steps.push({ name: "Save memory command", ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    error(`Save memory command setup failed: ${msg}`);
+    steps.push({ name: "Save memory command", ok: false, error: msg });
+  }
+
+  console.log();
+
   // Summary
   const failed = steps.filter((s) => !s.ok);
   if (failed.length === 0) {
     console.log(`  ${pc.green(pc.bold("Done."))} Restart opencode to pick up changes.`);
     console.log(
-      pc.dim(`  Run ${pc.cyan("/user:bootstrap-memory")} in any project to populate its knowledge graph.`)
+      pc.dim(`  Run ${pc.cyan("/user:bootstrap-memory")} to populate a project's knowledge graph.`)
+    );
+    console.log(
+      pc.dim(`  Run ${pc.cyan("/user:save-memory")} after a session to save what you learned.`)
     );
   } else {
     console.log(
