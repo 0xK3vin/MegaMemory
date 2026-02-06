@@ -1,14 +1,18 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
 import pc from "picocolors";
 import { success, skip, error, info, heading } from "./cli-utils.js";
 
 // ---- Paths ----
 
-const OPENCODE_CONFIG_DIR = path.join(
-  process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? "~", ".config"),
-  "opencode"
-);
+const OPENCODE_CONFIG_DIR =
+  process.env.OPENCODE_CONFIG_DIR ??
+  path.join(
+    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"),
+    "opencode"
+  );
 const OPENCODE_CONFIG_PATH = path.join(OPENCODE_CONFIG_DIR, "opencode.json");
 const OPENCODE_AGENTS_MD_PATH = path.join(OPENCODE_CONFIG_DIR, "AGENTS.md");
 const OPENCODE_TOOL_DIR = path.join(OPENCODE_CONFIG_DIR, "tool");
@@ -38,7 +42,7 @@ Be specific in summaries: include parameter names, defaults, file locations, and
  * Resolve absolute path to the MCP server entry point (dist/index.js).
  */
 function resolveServerEntryPoint(): string {
-  const thisDir = path.dirname(new URL(import.meta.url).pathname);
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
 
   // Running from dist/ → sibling index.js
   const fromDist = path.resolve(thisDir, "index.js");
@@ -57,7 +61,7 @@ function resolveServerEntryPoint(): string {
  * Resolve absolute path to the plugin/megamemory.ts skill file.
  */
 function resolvePluginSource(): string {
-  const thisDir = path.dirname(new URL(import.meta.url).pathname);
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(thisDir, "..", "plugin", "megamemory.ts");
 }
 
@@ -65,7 +69,7 @@ function resolvePluginSource(): string {
  * Resolve absolute path to the commands/bootstrap-memory.md file.
  */
 function resolveCommandSource(): string {
-  const thisDir = path.dirname(new URL(import.meta.url).pathname);
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(thisDir, "..", "commands", "bootstrap-memory.md");
 }
 
@@ -98,7 +102,10 @@ async function setupMcpConfig(): Promise<void> {
   const { execSync } = await import("child_process");
   let isGlobal = false;
   try {
-    execSync("which megamemory", { stdio: "ignore" });
+    execSync(
+      process.platform === "win32" ? "where megamemory" : "which megamemory",
+      { stdio: "ignore" }
+    );
     isGlobal = true;
   } catch {
     isGlobal = false;
