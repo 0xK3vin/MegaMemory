@@ -128,7 +128,7 @@ megamemory serve --port 8080   # custom port
 src/
   index.ts       CLI entry + MCP server
   tools.ts       Tool handlers (understand, create, update, link, remove)
-  db.ts          SQLite persistence (better-sqlite3, WAL mode)
+  db.ts          SQLite persistence (libsql, WAL mode)
   embeddings.ts  In-process embeddings (all-MiniLM-L6-v2, 384 dims)
   types.ts       TypeScript types
   cli-utils.ts   Colored output + interactive prompts

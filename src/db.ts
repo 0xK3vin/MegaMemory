@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import Database from "libsql";
 import path from "path";
 import fs from "fs";
 import type { NodeRow, EdgeRow } from "./types.js";
@@ -22,7 +22,13 @@ export class KnowledgeDB {
   }
 
   private migrate(): void {
-    const version = this.db.pragma("user_version", { simple: true }) as number;
+    const pragmaResult = this.db.pragma("user_version", { simple: true });
+    // libsql returns { user_version: N } instead of raw N like better-sqlite3
+    const version = (
+      typeof pragmaResult === "object" && pragmaResult !== null
+        ? (pragmaResult as Record<string, unknown>).user_version
+        : pragmaResult
+    ) as number;
 
     if (version < 1) {
       this.db.exec(`

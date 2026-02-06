@@ -6,3 +6,4 @@ dist/
 *.tgz
 *.log
 .env*
+.osgrep
