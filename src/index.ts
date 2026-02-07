@@ -22,19 +22,31 @@ ${pc.bold("Commands:")}
   ${pc.cyan("(no command)")}    Start the MCP stdio server ${pc.dim("(invoked by your editor)")}
   ${pc.cyan("init")}            Configure opencode integration
   ${pc.cyan("serve")}           Start the web graph explorer
+  ${pc.cyan("merge")}           Merge two knowledge.db files
+  ${pc.cyan("conflicts")}       List unresolved merge conflicts
+  ${pc.cyan("resolve")}         Resolve a merge conflict
 
 ${pc.bold("Options:")}
   ${pc.cyan("--port")} ${pc.dim("PORT")}     Port for the web explorer ${pc.dim("(default: 4321)")}
+  ${pc.cyan("--into")} ${pc.dim("FILE")}     Output path for merge ${pc.dim("(default: overwrites file1)")}
+  ${pc.cyan("--left-label")}    Label for left side in merge ${pc.dim("(default: left)")}
+  ${pc.cyan("--right-label")}   Label for right side in merge ${pc.dim("(default: right)")}
+  ${pc.cyan("--keep")}          Resolution strategy: left, right, or both
+  ${pc.cyan("--json")}          Machine-readable output for conflicts
+  ${pc.cyan("--db")} ${pc.dim("PATH")}       Database path for conflicts/resolve
   ${pc.cyan("--help, -h")}      Show this help
   ${pc.cyan("--version, -v")}   Show version
 
 ${pc.bold("Examples:")}
-  ${pc.dim("$")} megamemory init                ${pc.dim("Setup opencode config, plugins, and commands")}
-  ${pc.dim("$")} megamemory serve               ${pc.dim(`Open graph explorer at ${pc.underline("http://localhost:4321")}`)}
-  ${pc.dim("$")} megamemory serve --port 8080   ${pc.dim("Custom port")}
+  ${pc.dim("$")} megamemory init                                      ${pc.dim("Setup opencode config, plugins, and commands")}
+  ${pc.dim("$")} megamemory serve                                     ${pc.dim(`Open graph explorer at ${pc.underline("http://localhost:4321")}`)}
+  ${pc.dim("$")} megamemory serve --port 8080                         ${pc.dim("Custom port")}
+  ${pc.dim("$")} megamemory merge main.db feature.db --into merged.db ${pc.dim("Merge two knowledge DBs")}
+  ${pc.dim("$")} megamemory conflicts                                 ${pc.dim("View unresolved conflicts")}
+  ${pc.dim("$")} megamemory resolve <group-id> --keep left            ${pc.dim("Resolve a conflict")}
 `.trim();
 
-const KNOWN_COMMANDS = new Set(["init", "serve", "--help", "-h", "--version", "-v"]);
+const KNOWN_COMMANDS = new Set(["init", "serve", "merge", "conflicts", "resolve", "--help", "-h", "--version", "-v"]);
 
 function parseFlags(args: string[]): { port?: number; rawPort?: string } {
   const portIdx = args.indexOf("--port");
@@ -65,6 +77,27 @@ switch (cmd) {
 
     const { runServe } = await import("./web.js");
     await runServe(port);
+    break;
+  }
+
+  case "merge": {
+    const { runMerge } = await import("./merge-cli.js");
+    await runMerge(process.argv.slice(3));
+    process.exit(0);
+    break;
+  }
+
+  case "conflicts": {
+    const { runConflicts } = await import("./merge-cli.js");
+    await runConflicts(process.argv.slice(3));
+    process.exit(0);
+    break;
+  }
+
+  case "resolve": {
+    const { runResolve } = await import("./merge-cli.js");
+    await runResolve(process.argv.slice(3));
+    process.exit(0);
     break;
   }
 
@@ -104,7 +137,7 @@ async function startMcpServer() {
   const { z } = await import("zod");
   const path = await import("path");
   const { KnowledgeDB } = await import("./db.js");
-  const { understand, createConcept, updateConcept, link, removeConcept, listRoots } =
+  const { understand, createConcept, updateConcept, link, removeConcept, listRoots, listConflicts, resolveConflict } =
     await import("./tools.js");
 
   type NodeKind = import("./types.js").NodeKind;
@@ -259,6 +292,46 @@ async function startMcpServer() {
       try {
         const result = listRoots(db);
         return { content: [{ type: "text" as const, text: JSON.stringify({ ...result, stats: db.getStats() }, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "list_conflicts",
+    "List all unresolved merge conflicts in the knowledge graph, grouped by merge_group. Each group contains competing versions with full data. Call this when the user runs /merge to begin AI-assisted conflict resolution.",
+    {},
+    async () => {
+      try {
+        const result = listConflicts(db);
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+      }
+    }
+  );
+
+  server.tool(
+    "resolve_conflict",
+    "Resolve a merge conflict by providing the correct resolved content. Read both conflict versions, verify against the current codebase, then provide the accurate resolved summary. Do NOT just pick a side — write the truth.",
+    {
+      merge_group: z.string().describe("The merge_group UUID of the conflict to resolve"),
+      resolved: z.object({
+        summary: z.string().describe("The correct, resolved summary for this concept — verified against the current codebase"),
+        why: z.string().optional().describe("Updated rationale"),
+        file_refs: z.array(z.string()).optional().describe("Updated file references"),
+      }).describe("The resolved content to write — must reflect current codebase truth"),
+      reason: z.string().describe("Explanation of what you verified and why this resolution is correct"),
+    },
+    async (params) => {
+      try {
+        const result = await resolveConflict(db, {
+          merge_group: params.merge_group,
+          resolved: params.resolved,
+          reason: params.reason,
+        });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
       }

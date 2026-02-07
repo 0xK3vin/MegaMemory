@@ -6,12 +6,16 @@ import type {
   UpdateConceptInput,
   LinkInput,
   RemoveConceptInput,
+  ResolveConflictInput,
   NodeWithContext,
   UnderstandOutput,
   ListRootsOutput,
+  ListConflictsOutput,
+  ConflictGroup,
   NodeRow,
   RelationType,
 } from "./types.js";
+import { stripMergeSuffix } from "./merge.js";
 
 /**
  * Generate a slug ID from a name, optionally prefixed with parent ID.
@@ -279,4 +283,116 @@ export function listRoots(db: KnowledgeDB): ListRootsOutput & { hint?: string } 
       : undefined;
 
   return { roots, ...(hint ? { hint } : {}) };
+}
+
+// ---- Merge conflict tools ----
+
+export function listConflicts(db: KnowledgeDB): ListConflictsOutput {
+  const conflictNodes = db.getConflictNodes();
+
+  if (conflictNodes.length === 0) {
+    return { conflicts: [] };
+  }
+
+  // Group by merge_group
+  const groups = new Map<string, NodeRow[]>();
+  for (const node of conflictNodes) {
+    const mg = node.merge_group!;
+    if (!groups.has(mg)) groups.set(mg, []);
+    groups.get(mg)!.push(node);
+  }
+
+  const conflicts: ConflictGroup[] = [];
+
+  for (const [mergeGroup, nodes] of groups) {
+    const versions = nodes.map((n) => {
+      const outgoingEdges = db.getOutgoingEdges(n.id);
+      const fileRefs = n.file_refs ? JSON.parse(n.file_refs) : null;
+
+      return {
+        id: n.id,
+        original_id: stripMergeSuffix(n.id),
+        source_branch: n.source_branch ?? "unknown",
+        name: n.name,
+        kind: n.kind as NodeWithContext["kind"],
+        summary: n.summary,
+        why: n.why,
+        file_refs: fileRefs,
+        edges: outgoingEdges.map((e) => ({
+          to: e.to_id,
+          relation: e.relation as RelationType,
+          description: e.description,
+        })),
+        removed_at: n.removed_at,
+        removed_reason: n.removed_reason,
+      };
+    });
+
+    conflicts.push({
+      merge_group: mergeGroup,
+      merge_timestamp: nodes[0].merge_timestamp,
+      versions,
+    });
+  }
+
+  return { conflicts };
+}
+
+export async function resolveConflict(
+  db: KnowledgeDB,
+  input: ResolveConflictInput
+): Promise<{ message: string }> {
+  const nodes = db.getNodesByMergeGroup(input.merge_group);
+
+  if (nodes.length === 0) {
+    throw new Error(`No nodes found with merge_group: ${input.merge_group}`);
+  }
+
+  // Prefer an active (non-removed) node as the base so the resolved concept
+  // stays active for removal conflicts. Fall back to first node.
+  const base = nodes.find((n) => n.removed_at === null) ?? nodes[0];
+  const originalId = stripMergeSuffix(base.id);
+
+  // Delete all conflict copies except the base
+  for (const node of nodes) {
+    if (node.id !== base.id) {
+      db.hardDeleteNode(node.id);
+    }
+  }
+
+  // Rename the base back to the original clean ID
+  if (base.id !== originalId) {
+    const renamed = db.renameNodeId(base.id, originalId);
+    if (!renamed) {
+      throw new Error(`Failed to rename resolved node from ${base.id} to ${originalId}`);
+    }
+  }
+
+  // Apply the resolved content
+  const changes: { summary?: string; why?: string; file_refs?: string[] } = {
+    summary: input.resolved.summary,
+  };
+  if (input.resolved.why !== undefined) changes.why = input.resolved.why;
+  if (input.resolved.file_refs !== undefined) changes.file_refs = input.resolved.file_refs;
+
+  const updated = db.updateNode(originalId, changes);
+  if (!updated) {
+    throw new Error(`Failed to apply resolved content to ${originalId}`);
+  }
+
+  // Regenerate embedding with the resolved summary
+  const node = db.getNode(originalId);
+  if (node) {
+    const text = embeddingText(node.name, node.kind, input.resolved.summary);
+    const newEmbedding = await embed(text);
+    db.updateNode(originalId, { embedding: newEmbedding });
+  }
+
+  // Clear merge flags on the resolved node and any associated edges
+  db.clearNodeMergeFlags(originalId);
+  db.clearEdgeMergeFlagsByGroup(input.merge_group);
+
+  return {
+    message: `Resolved "${originalId}". Reason: ${input.reason}`,
+  };
 }

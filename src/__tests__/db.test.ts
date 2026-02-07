@@ -274,6 +274,148 @@ describe("KnowledgeDB", () => {
     });
   });
 
+  describe("schema v2 - merge columns", () => {
+    it("has merge columns on fresh database", () => {
+      // Insert a node with merge fields via insertNodeRaw
+      db.insertNodeRaw({
+        id: "merge-test",
+        name: "Merge Test",
+        kind: "feature",
+        summary: "Testing merge columns",
+        merge_group: "test-uuid",
+        needs_merge: 1,
+        source_branch: "main",
+        merge_timestamp: "2024-01-01 00:00:00",
+      });
+
+      const node = db.getAllNodesRaw().find(n => n.id === "merge-test");
+      expect(node).toBeDefined();
+      expect(node!.merge_group).toBe("test-uuid");
+      expect(node!.needs_merge).toBe(1);
+      expect(node!.source_branch).toBe("main");
+      expect(node!.merge_timestamp).toBe("2024-01-01 00:00:00");
+    });
+
+    it("has merge columns on edges", () => {
+      db.insertNode({
+        id: "from-node", name: "From", kind: "feature", summary: "s",
+        why: null, file_refs: null, parent_id: null, created_by_task: null, embedding: null,
+      });
+      db.insertNode({
+        id: "to-node", name: "To", kind: "feature", summary: "s",
+        why: null, file_refs: null, parent_id: null, created_by_task: null, embedding: null,
+      });
+
+      db.insertEdgeRaw({
+        from_id: "from-node",
+        to_id: "to-node",
+        relation: "calls",
+        merge_group: "edge-uuid",
+        needs_merge: 1,
+        source_branch: "feature",
+        merge_timestamp: "2024-06-01 12:00:00",
+      });
+
+      const edges = db.getAllEdgesRaw();
+      const mergeEdge = edges.find(e => e.merge_group === "edge-uuid");
+      expect(mergeEdge).toBeDefined();
+      expect(mergeEdge!.needs_merge).toBe(1);
+      expect(mergeEdge!.source_branch).toBe("feature");
+    });
+  });
+
+  describe("merge query methods", () => {
+    it("getConflictNodes returns only nodes with needs_merge=1", () => {
+      db.insertNodeRaw({
+        id: "clean", name: "Clean", kind: "feature", summary: "clean",
+      });
+      db.insertNodeRaw({
+        id: "conflict", name: "Conflict", kind: "feature", summary: "conflict",
+        merge_group: "uuid-1", needs_merge: 1, source_branch: "left",
+      });
+
+      const conflicts = db.getConflictNodes();
+      expect(conflicts).toHaveLength(1);
+      expect(conflicts[0].id).toBe("conflict");
+    });
+
+    it("getNodesByMergeGroup returns nodes sharing a merge_group", () => {
+      db.insertNodeRaw({
+        id: "a::left", name: "A", kind: "feature", summary: "left",
+        merge_group: "group-1", needs_merge: 1, source_branch: "left",
+      });
+      db.insertNodeRaw({
+        id: "a::right", name: "A", kind: "feature", summary: "right",
+        merge_group: "group-1", needs_merge: 1, source_branch: "right",
+      });
+      db.insertNodeRaw({
+        id: "other", name: "Other", kind: "feature", summary: "other",
+        merge_group: "group-2", needs_merge: 1, source_branch: "left",
+      });
+
+      const group1 = db.getNodesByMergeGroup("group-1");
+      expect(group1).toHaveLength(2);
+      expect(group1.map(n => n.id).sort()).toEqual(["a::left", "a::right"]);
+    });
+
+    it("clearNodeMergeFlags resets merge fields to null/0", () => {
+      db.insertNodeRaw({
+        id: "flagged", name: "Flagged", kind: "feature", summary: "s",
+        merge_group: "uuid", needs_merge: 1, source_branch: "main",
+        merge_timestamp: "2024-01-01",
+      });
+
+      db.clearNodeMergeFlags("flagged");
+      const node = db.getAllNodesRaw().find(n => n.id === "flagged")!;
+      expect(node.merge_group).toBeNull();
+      expect(node.needs_merge).toBe(0);
+      expect(node.source_branch).toBeNull();
+      expect(node.merge_timestamp).toBeNull();
+    });
+
+    it("renameNodeId updates id and all references", () => {
+      db.insertNode({
+        id: "old-id", name: "Node", kind: "feature", summary: "s",
+        why: null, file_refs: null, parent_id: null, created_by_task: null, embedding: null,
+      });
+      db.insertNode({
+        id: "target", name: "Target", kind: "feature", summary: "s",
+        why: null, file_refs: null, parent_id: null, created_by_task: null, embedding: null,
+      });
+      db.insertEdge({ from_id: "old-id", to_id: "target", relation: "calls", description: null });
+
+      const renamed = db.renameNodeId("old-id", "new-id");
+      expect(renamed).toBe(true);
+
+      expect(db.getNode("old-id")).toBeUndefined();
+      expect(db.getNode("new-id")).toBeDefined();
+
+      // Edge should reference new-id
+      const edges = db.getOutgoingEdges("new-id");
+      expect(edges).toHaveLength(1);
+      expect(edges[0].from_id).toBe("new-id");
+    });
+
+    it("hardDeleteNode removes node and its edges permanently", () => {
+      db.insertNode({
+        id: "to-hard-delete", name: "Del", kind: "feature", summary: "s",
+        why: null, file_refs: null, parent_id: null, created_by_task: null, embedding: null,
+      });
+      db.insertNode({
+        id: "other", name: "Other", kind: "feature", summary: "s",
+        why: null, file_refs: null, parent_id: null, created_by_task: null, embedding: null,
+      });
+      db.insertEdge({ from_id: "to-hard-delete", to_id: "other", relation: "calls", description: null });
+
+      db.hardDeleteNode("to-hard-delete");
+
+      // Completely gone, not even in raw query
+      const all = db.getAllNodesRaw();
+      expect(all.find(n => n.id === "to-hard-delete")).toBeUndefined();
+      expect(db.getAllEdgesRaw()).toHaveLength(0);
+    });
+  });
+
   describe("stats", () => {
     it("returns correct counts", () => {
       db.insertNode({

@@ -13,6 +13,10 @@ export interface Node {
   updated_at: string;
   removed_at: string | null;
   removed_reason: string | null;
+  merge_group: string | null;
+  needs_merge: boolean;
+  source_branch: string | null;
+  merge_timestamp: string | null;
 }
 
 export type NodeKind =
@@ -30,6 +34,10 @@ export interface Edge {
   relation: RelationType;
   description: string | null;
   created_at: string;
+  merge_group: string | null;
+  needs_merge: boolean;
+  source_branch: string | null;
+  merge_timestamp: string | null;
 }
 
 export type RelationType =
@@ -150,6 +158,10 @@ export interface NodeRow {
   removed_at: string | null;
   removed_reason: string | null;
   embedding: Buffer | null;
+  merge_group: string | null;
+  needs_merge: number; // SQLite stores boolean as 0/1
+  source_branch: string | null;
+  merge_timestamp: string | null;
 }
 
 export interface EdgeRow {
@@ -159,4 +171,52 @@ export interface EdgeRow {
   relation: string;
   description: string | null;
   created_at: string;
+  merge_group: string | null;
+  needs_merge: number; // SQLite stores boolean as 0/1
+  source_branch: string | null;
+  merge_timestamp: string | null;
+}
+
+// ---- Merge types ----
+
+export interface ConflictVersion {
+  id: string;
+  original_id: string;
+  source_branch: string;
+  name: string;
+  kind: NodeKind;
+  summary: string;
+  why: string | null;
+  file_refs: string[] | null;
+  edges: Array<{ to: string; relation: RelationType; description: string | null }>;
+  removed_at: string | null;
+  removed_reason: string | null;
+}
+
+export interface ConflictGroup {
+  merge_group: string;
+  merge_timestamp: string | null;
+  versions: ConflictVersion[];
+}
+
+export interface ListConflictsOutput {
+  conflicts: ConflictGroup[];
+}
+
+export interface ResolveConflictInput {
+  merge_group: string;
+  resolved: {
+    summary: string;
+    why?: string;
+    file_refs?: string[];
+  };
+  reason: string;
+}
+
+export interface MergeResult {
+  clean: number;
+  conceptConflicts: number;
+  edgeConflicts: number;
+  removedClean: number;
+  mergeGroups: string[];
 }

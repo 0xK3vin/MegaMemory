@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import type { NodeRow, EdgeRow } from "./types.js";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export class KnowledgeDB {
   private db: Database.Database;
@@ -46,6 +46,10 @@ export class KnowledgeDB {
           removed_at TEXT,
           removed_reason TEXT,
           embedding BLOB,
+          merge_group TEXT,
+          needs_merge INTEGER DEFAULT 0,
+          source_branch TEXT,
+          merge_timestamp TEXT,
           FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE SET NULL
         );
 
@@ -56,6 +60,10 @@ export class KnowledgeDB {
           relation TEXT NOT NULL,
           description TEXT,
           created_at TEXT DEFAULT (datetime('now')),
+          merge_group TEXT,
+          needs_merge INTEGER DEFAULT 0,
+          source_branch TEXT,
+          merge_timestamp TEXT,
           FOREIGN KEY (from_id) REFERENCES nodes(id) ON DELETE CASCADE,
           FOREIGN KEY (to_id) REFERENCES nodes(id) ON DELETE CASCADE
         );
@@ -63,10 +71,52 @@ export class KnowledgeDB {
         CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
         CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
         CREATE INDEX IF NOT EXISTS idx_nodes_removed ON nodes(removed_at);
+        CREATE INDEX IF NOT EXISTS idx_nodes_merge_group ON nodes(merge_group);
+        CREATE INDEX IF NOT EXISTS idx_nodes_needs_merge ON nodes(needs_merge);
         CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
         CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
         CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
+        CREATE INDEX IF NOT EXISTS idx_edges_merge_group ON edges(merge_group);
+        CREATE INDEX IF NOT EXISTS idx_edges_needs_merge ON edges(needs_merge);
       `);
+    }
+
+    if (version < 2) {
+      // Add merge-related columns for existing v1 databases
+      const nodeColumns = this.db
+        .prepare("PRAGMA table_info(nodes)")
+        .all() as Array<{ name: string }>;
+      const nodeColNames = new Set(nodeColumns.map((c) => c.name));
+
+      if (!nodeColNames.has("merge_group")) {
+        this.db.exec(`
+          ALTER TABLE nodes ADD COLUMN merge_group TEXT;
+          ALTER TABLE nodes ADD COLUMN needs_merge INTEGER DEFAULT 0;
+          ALTER TABLE nodes ADD COLUMN source_branch TEXT;
+          ALTER TABLE nodes ADD COLUMN merge_timestamp TEXT;
+          CREATE INDEX IF NOT EXISTS idx_nodes_merge_group ON nodes(merge_group);
+          CREATE INDEX IF NOT EXISTS idx_nodes_needs_merge ON nodes(needs_merge);
+        `);
+      }
+
+      const edgeColumns = this.db
+        .prepare("PRAGMA table_info(edges)")
+        .all() as Array<{ name: string }>;
+      const edgeColNames = new Set(edgeColumns.map((c) => c.name));
+
+      if (!edgeColNames.has("merge_group")) {
+        this.db.exec(`
+          ALTER TABLE edges ADD COLUMN merge_group TEXT;
+          ALTER TABLE edges ADD COLUMN needs_merge INTEGER DEFAULT 0;
+          ALTER TABLE edges ADD COLUMN source_branch TEXT;
+          ALTER TABLE edges ADD COLUMN merge_timestamp TEXT;
+          CREATE INDEX IF NOT EXISTS idx_edges_merge_group ON edges(merge_group);
+          CREATE INDEX IF NOT EXISTS idx_edges_needs_merge ON edges(needs_merge);
+        `);
+      }
+    }
+
+    if (version < SCHEMA_VERSION) {
       this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
     }
   }
@@ -343,6 +393,192 @@ export class KnowledgeDB {
         .get() as { count: number }
     ).count;
     return { nodes, edges, removed };
+  }
+
+  // ---- Merge-related methods ----
+
+  getConflictNodes(): NodeRow[] {
+    // Don't filter by removed_at — removal conflicts are valid (one side removed, other didn't)
+    return this.db
+      .prepare("SELECT * FROM nodes WHERE needs_merge = 1")
+      .all() as NodeRow[];
+  }
+
+  getConflictEdges(): EdgeRow[] {
+    return this.db
+      .prepare("SELECT * FROM edges WHERE needs_merge = 1")
+      .all() as EdgeRow[];
+  }
+
+  getNodesByMergeGroup(mergeGroup: string): NodeRow[] {
+    return this.db
+      .prepare("SELECT * FROM nodes WHERE merge_group = ?")
+      .all(mergeGroup) as NodeRow[];
+  }
+
+  getEdgesByMergeGroup(mergeGroup: string): EdgeRow[] {
+    return this.db
+      .prepare("SELECT * FROM edges WHERE merge_group = ?")
+      .all(mergeGroup) as EdgeRow[];
+  }
+
+  clearNodeMergeFlags(id: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE nodes SET merge_group = NULL, needs_merge = 0, source_branch = NULL,
+         merge_timestamp = NULL, updated_at = datetime('now') WHERE id = ?`
+      )
+      .run(id);
+    return result.changes > 0;
+  }
+
+  clearEdgeMergeFlagsByGroup(mergeGroup: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE edges SET merge_group = NULL, needs_merge = 0, source_branch = NULL,
+         merge_timestamp = NULL WHERE merge_group = ?`
+      )
+      .run(mergeGroup);
+    return result.changes > 0;
+  }
+
+  renameNodeId(oldId: string, newId: string): boolean {
+    // Temporarily disable foreign keys for the rename operation,
+    // since self-referencing FKs (parent_id → id) would block the update.
+    // Wrapped in a transaction so all 4 updates succeed or none do.
+    this.db.pragma("foreign_keys = OFF");
+    try {
+      let changed = false;
+      this.db.exec("BEGIN");
+      try {
+        const result = this.db
+          .prepare("UPDATE nodes SET id = @newId, updated_at = datetime('now') WHERE id = @oldId")
+          .run({ oldId, newId });
+
+        if (result.changes > 0) {
+          changed = true;
+          // Update parent_id references in children
+          this.db
+            .prepare("UPDATE nodes SET parent_id = @newId WHERE parent_id = @oldId")
+            .run({ oldId, newId });
+          // Update edge references
+          this.db
+            .prepare("UPDATE edges SET from_id = @newId WHERE from_id = @oldId")
+            .run({ oldId, newId });
+          this.db
+            .prepare("UPDATE edges SET to_id = @newId WHERE to_id = @oldId")
+            .run({ oldId, newId });
+        }
+        this.db.exec("COMMIT");
+      } catch (err) {
+        this.db.exec("ROLLBACK");
+        throw err;
+      }
+      return changed;
+    } finally {
+      this.db.pragma("foreign_keys = ON");
+    }
+  }
+
+  getAllNodesRaw(): NodeRow[] {
+    return this.db.prepare("SELECT * FROM nodes").all() as NodeRow[];
+  }
+
+  getAllEdgesRaw(): EdgeRow[] {
+    return this.db.prepare("SELECT * FROM edges").all() as EdgeRow[];
+  }
+
+  deleteEdgesForNode(nodeId: string): void {
+    this.db
+      .prepare("DELETE FROM edges WHERE from_id = ? OR to_id = ?")
+      .run(nodeId, nodeId);
+  }
+
+  hardDeleteNode(id: string): boolean {
+    this.deleteEdgesForNode(id);
+    const result = this.db
+      .prepare("DELETE FROM nodes WHERE id = ?")
+      .run(id);
+    return result.changes > 0;
+  }
+
+  insertNodeRaw(node: {
+    id: string;
+    name: string;
+    kind: string;
+    summary: string;
+    why?: string | null;
+    file_refs?: string | null;
+    parent_id?: string | null;
+    created_by_task?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    removed_at?: string | null;
+    removed_reason?: string | null;
+    embedding?: Buffer | null;
+    merge_group?: string | null;
+    needs_merge?: number;
+    source_branch?: string | null;
+    merge_timestamp?: string | null;
+  }): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO nodes (id, name, kind, summary, why, file_refs, parent_id, created_by_task,
+        created_at, updated_at, removed_at, removed_reason, embedding,
+        merge_group, needs_merge, source_branch, merge_timestamp)
+      VALUES (@id, @name, @kind, @summary, @why, @file_refs, @parent_id, @created_by_task,
+        @created_at, @updated_at, @removed_at, @removed_reason, @embedding,
+        @merge_group, @needs_merge, @source_branch, @merge_timestamp)
+    `);
+    stmt.run({
+      id: node.id,
+      name: node.name,
+      kind: node.kind,
+      summary: node.summary,
+      why: node.why ?? null,
+      file_refs: node.file_refs ?? null,
+      parent_id: node.parent_id ?? null,
+      created_by_task: node.created_by_task ?? null,
+      created_at: node.created_at ?? null,
+      updated_at: node.updated_at ?? null,
+      removed_at: node.removed_at ?? null,
+      removed_reason: node.removed_reason ?? null,
+      embedding: node.embedding ?? null,
+      merge_group: node.merge_group ?? null,
+      needs_merge: node.needs_merge ?? 0,
+      source_branch: node.source_branch ?? null,
+      merge_timestamp: node.merge_timestamp ?? null,
+    });
+  }
+
+  insertEdgeRaw(edge: {
+    from_id: string;
+    to_id: string;
+    relation: string;
+    description?: string | null;
+    created_at?: string | null;
+    merge_group?: string | null;
+    needs_merge?: number;
+    source_branch?: string | null;
+    merge_timestamp?: string | null;
+  }): number {
+    const stmt = this.db.prepare(`
+      INSERT INTO edges (from_id, to_id, relation, description, created_at,
+        merge_group, needs_merge, source_branch, merge_timestamp)
+      VALUES (@from_id, @to_id, @relation, @description, @created_at,
+        @merge_group, @needs_merge, @source_branch, @merge_timestamp)
+    `);
+    const result = stmt.run({
+      from_id: edge.from_id,
+      to_id: edge.to_id,
+      relation: edge.relation,
+      description: edge.description ?? null,
+      created_at: edge.created_at ?? null,
+      merge_group: edge.merge_group ?? null,
+      needs_merge: edge.needs_merge ?? 0,
+      source_branch: edge.source_branch ?? null,
+      merge_timestamp: edge.merge_timestamp ?? null,
+    });
+    return Number(result.lastInsertRowid);
   }
 
   close(): void {

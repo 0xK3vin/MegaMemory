@@ -47,15 +47,17 @@ Your persistent memory of the codebase. You write concepts as you work. You quer
 | \`megamemory:link\` | After tasks | Create relationship between two concepts |
 | \`megamemory:remove_concept\` | On refactor/delete | Soft-delete with reason (history preserved) |
 | \`megamemory:list_roots\` | Session start | All top-level concepts with children + stats |
+| \`megamemory:list_conflicts\` | After merge | Lists unresolved merge conflicts grouped by merge_group |
+| \`megamemory:resolve_conflict\` | During /merge | Resolve a conflict by providing verified, correct content |
 `;
 
 export default tool({
   description: SKILL,
   args: {
     action: tool.schema
-      .enum(["query", "record", "overview"])
+      .enum(["query", "record", "overview", "merge"])
       .describe(
-        "Workflow action: query (before task — understand context), record (after task — create/update/link), overview (session start — list roots)",
+        "Workflow action: query (before task — understand context), record (after task — create/update/link), overview (session start — list roots), merge (resolve merge conflicts)",
       ),
     query: tool.schema
       .string()
@@ -118,8 +120,27 @@ Use the returned context instead of re-reading source files when possible. If no
    - id: concept to remove
    - reason: why it was removed${concepts ? `\n\nContext about what to record: "${concepts}"` : ""}`;
 
+      case "merge":
+        return `To resolve merge conflicts in the knowledge graph:
+
+1. **List conflicts** → megamemory:list_conflicts
+   - Returns all unresolved conflicts grouped by merge_group
+   - Each group has competing versions with summaries, file_refs, edges
+
+2. **For each conflict:**
+   a. Read both versions' summaries, file_refs, and edges
+   b. Read the actual source files referenced in file_refs to determine what the code ACTUALLY does now
+   c. Write the correct resolved content based on the current codebase — do NOT just pick a side
+
+3. **Resolve** → megamemory:resolve_conflict
+   - merge_group: the UUID of the conflict
+   - resolved: {summary, why?, file_refs?} — the verified, correct content
+   - reason: what you verified and why this resolution is correct
+
+The goal is accuracy: the resolved concept should describe the code as it actually exists. If referenced files no longer exist, the concept may be outdated — update or remove accordingly.`;
+
       default:
-        return `Unknown action: ${action}. Use: overview (session start), query (before task), record (after task).`;
+        return `Unknown action: ${action}. Use: overview (session start), query (before task), record (after task), merge (resolve conflicts).`;
     }
   },
 });

@@ -84,6 +84,8 @@ Add megamemory as a stdio MCP server. The command is just `megamemory` (no argum
 | `link` | Create a typed relationship between two concepts. |
 | `remove_concept` | Soft-delete a concept with a reason. History preserved. |
 | `list_roots` | List all top-level concepts with direct children. |
+| `list_conflicts` | List unresolved merge conflicts grouped by merge group. |
+| `resolve_conflict` | Resolve a merge conflict by providing verified, correct content based on the current codebase. |
 
 **Concept kinds:** `feature` · `module` · `pattern` · `config` · `decision` · `component`
 
@@ -118,8 +120,56 @@ megamemory serve --port 8080   # custom port
 | `megamemory` | Start the MCP stdio server |
 | `megamemory init` | Configure opencode integration |
 | `megamemory serve` | Launch the web graph explorer |
+| `megamemory merge` | Merge two knowledge.db files |
+| `megamemory conflicts` | List unresolved merge conflicts |
+| `megamemory resolve` | Resolve a merge conflict |
 | `megamemory --help` | Show help |
 | `megamemory --version` | Show version |
+
+---
+
+### Merging Knowledge Graphs
+
+When multiple git branches diverge, each may modify `.megamemory/knowledge.db` independently. Since SQLite files can't be auto-merged by git, megamemory provides a dedicated merge system.
+
+#### Merge two databases
+
+```bash
+megamemory merge main.db feature.db --into merged.db
+```
+
+The merge compares concepts by ID. Identical concepts are deduplicated. Concepts with the same ID but different content are flagged as conflicts — both versions are kept with `::left`/`::right` suffixed IDs and a shared merge group UUID. Use `--left-label` and `--right-label` to tag versions with branch names instead of the defaults.
+
+```bash
+megamemory merge main.db feature.db --into merged.db --left-label main --right-label feature-xyz
+```
+
+#### View conflicts
+
+```bash
+megamemory conflicts            # human-readable summary
+megamemory conflicts --json     # machine-readable output
+megamemory conflicts --db path  # specify database path
+```
+
+#### Resolve conflicts manually
+
+```bash
+megamemory resolve <merge-group-uuid> --keep left    # keep the left version
+megamemory resolve <merge-group-uuid> --keep right   # keep the right version
+megamemory resolve <merge-group-uuid> --keep both    # keep both as separate concepts
+```
+
+#### AI-assisted resolution
+
+When an AI agent runs `/merge`, it:
+
+1. Calls `list_conflicts` to get all unresolved conflict groups
+2. For each conflict, reads both versions and the actual source files referenced in `file_refs`
+3. Verifies what the code actually does now and writes the correct resolved content
+4. Calls `resolve_conflict` with `resolved: {summary, why?, file_refs?}` and a `reason` explaining what was verified
+
+The agent does NOT just pick a side — it reads the code and writes the truth. The `resolved` object provides the correct summary, rationale, and file references based on the current codebase state.
 
 ---
 
@@ -127,10 +177,12 @@ megamemory serve --port 8080   # custom port
 
 ```
 src/
-  index.ts       CLI entry + MCP server
-  tools.ts       Tool handlers (understand, create, update, link, remove)
-  db.ts          SQLite persistence (libsql, WAL mode)
+  index.ts       CLI entry + MCP server (8 tools)
+  tools.ts       Tool handlers (understand, create, update, link, remove, list_conflicts, resolve_conflict)
+  db.ts          SQLite persistence (libsql, WAL mode, schema v2)
   embeddings.ts  In-process embeddings (all-MiniLM-L6-v2, 384 dims)
+  merge.ts       Two-way merge engine for knowledge.db files
+  merge-cli.ts   CLI handlers for merge, conflicts, resolve commands
   types.ts       TypeScript types
   cli-utils.ts   Colored output + interactive prompts
   init.ts        opencode setup wizard
@@ -145,8 +197,9 @@ web/
 ```
 
 - **Embeddings** — In-process via [Xenova/all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2) (ONNX, quantized). No API keys. No network calls after first model download.
-- **Storage** — SQLite with WAL mode, soft-delete with history, schema migrations.
+- **Storage** — SQLite with WAL mode, soft-delete with history, schema migrations (currently v2).
 - **Search** — Brute-force cosine similarity over all node embeddings. Fast enough for knowledge graphs with <10k nodes.
+- **Merge** — Two-way merge with conflict detection. Concepts compared by ID; conflicts get suffixed IDs and shared merge group UUIDs. AI-assisted resolution via MCP tools.
 
 ---
 
