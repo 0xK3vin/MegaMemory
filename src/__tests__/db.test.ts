@@ -198,6 +198,79 @@ describe("KnowledgeDB", () => {
     });
   });
 
+  describe("getAllActiveNodesWithEmbeddings", () => {
+    function makeEmbeddingBuffer(values: number[]): Buffer {
+      const arr = new Float32Array(values);
+      return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+    }
+
+    it("returns embeddings as Buffer instances with correct float32 data", () => {
+      const original = makeEmbeddingBuffer([1.0, 2.0, 3.0, 4.0]);
+      db.insertNode({
+        id: "with-emb",
+        name: "With Embedding",
+        kind: "feature",
+        summary: "Has an embedding",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: original,
+      });
+
+      const results = db.getAllActiveNodesWithEmbeddings();
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe("with-emb");
+
+      const emb = results[0].embedding!;
+      expect(Buffer.isBuffer(emb)).toBe(true);
+
+      // Verify the float32 values round-trip correctly
+      const floats = new Float32Array(emb.buffer, emb.byteOffset, emb.byteLength / Float32Array.BYTES_PER_ELEMENT);
+      expect(floats[0]).toBeCloseTo(1.0);
+      expect(floats[1]).toBeCloseTo(2.0);
+      expect(floats[2]).toBeCloseTo(3.0);
+      expect(floats[3]).toBeCloseTo(4.0);
+    });
+
+    it("excludes nodes without embeddings", () => {
+      db.insertNode({
+        id: "no-emb",
+        name: "No Embedding",
+        kind: "feature",
+        summary: "Missing embedding",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: null,
+      });
+
+      const results = db.getAllActiveNodesWithEmbeddings();
+      expect(results).toHaveLength(0);
+    });
+
+    it("excludes soft-deleted nodes", () => {
+      const emb = makeEmbeddingBuffer([1.0, 2.0]);
+      db.insertNode({
+        id: "deleted-emb",
+        name: "Deleted",
+        kind: "feature",
+        summary: "Will be deleted",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: emb,
+      });
+
+      db.softDeleteNode("deleted-emb", "No longer needed");
+
+      const results = db.getAllActiveNodesWithEmbeddings();
+      expect(results).toHaveLength(0);
+    });
+  });
+
   describe("edges", () => {
     beforeEach(() => {
       db.insertNode({

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  embed,
   embeddingText,
   cosineSimilarity,
   findTopK,
@@ -17,6 +18,20 @@ function mockEmbedding(values: number[]): Buffer {
 describe("EMBEDDING_DIM", () => {
   it("is 384", () => {
     expect(EMBEDDING_DIM).toBe(384);
+  });
+});
+
+describe("embed", () => {
+  it("rejects empty string", async () => {
+    await expect(embed("")).rejects.toThrow("Cannot embed empty text");
+  });
+
+  it("rejects whitespace-only string", async () => {
+    await expect(embed("   ")).rejects.toThrow("Cannot embed empty text");
+  });
+
+  it("rejects newline/tab-only string", async () => {
+    await expect(embed("\n\t  \n")).rejects.toThrow("Cannot embed empty text");
   });
 });
 
@@ -103,5 +118,18 @@ describe("findTopK", () => {
   it("returns empty array for empty candidates", () => {
     const results = findTopK(queryEmbedding, [], 5);
     expect(results).toEqual([]);
+  });
+
+  it("filters out candidates with zero-length embedding buffers", () => {
+    const candidatesWithEmpty = [
+      { id: "valid", name: "Valid", kind: "feature", summary: "", embedding: mockEmbedding([1, 0, 0]) },
+      { id: "empty-buf", name: "Empty", kind: "feature", summary: "", embedding: Buffer.alloc(0) },
+      { id: "null-emb", name: "Null", kind: "feature", summary: "", embedding: null },
+    ];
+    const results = findTopK(queryEmbedding, candidatesWithEmpty, 10);
+    const ids = results.map((r) => r.id);
+    expect(ids).toEqual(["valid"]);
+    expect(ids).not.toContain("empty-buf");
+    expect(ids).not.toContain("null-emb");
   });
 });
