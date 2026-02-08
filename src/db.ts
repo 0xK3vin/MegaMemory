@@ -319,13 +319,16 @@ export class KnowledgeDB {
   getAllActiveNodesWithEmbeddings(): Array<
     Pick<NodeRow, "id" | "name" | "kind" | "summary" | "embedding">
   > {
-    return this.db
+    const rows = this.db
       .prepare(
         "SELECT id, name, kind, summary, embedding FROM nodes WHERE removed_at IS NULL AND embedding IS NOT NULL"
       )
-      .all() as Array<
-      Pick<NodeRow, "id" | "name" | "kind" | "summary" | "embedding">
-    >;
+      .all() as Array<any>;
+    
+    return rows.map((row) => ({
+      ...row,
+      embedding: row.embedding ? Buffer.from(row.embedding) : null
+    })) as Array<Pick<NodeRow, "id" | "name" | "kind" | "summary" | "embedding">>;
   }
 
   nodeExists(id: string): boolean {
