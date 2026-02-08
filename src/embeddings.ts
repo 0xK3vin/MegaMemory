@@ -18,14 +18,28 @@ async function getExtractor(): Promise<FeatureExtractionPipeline> {
 }
 
 /**
- * Generate an embedding vector for the given text.
+ * Generate an embedding vector for given text.
  * Returns a Buffer containing float32 values.
  */
 export async function embed(text: string): Promise<Buffer> {
+  // Validate input text
+  if (!text || text.trim().length === 0) {
+    throw new Error(`Cannot embed empty text`);
+  }
+
   const ext = await getExtractor();
   const output = await ext(text, { pooling: "mean", normalize: true });
   const data = output.data as Float32Array;
-  return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+
+  // Validate embedding has correct dimensions
+  if (buffer.length !== EMBEDDING_DIM * Float32Array.BYTES_PER_ELEMENT) {
+    throw new Error(
+      `Invalid embedding dimension: expected ${EMBEDDING_DIM} floats (${EMBEDDING_DIM * Float32Array.BYTES_PER_ELEMENT} bytes), got ${data.length} floats (${buffer.length} bytes). Text: "${text.substring(0, 50)}..."`
+    );
+  }
+
+  return buffer;
 }
 
 /**
@@ -91,7 +105,7 @@ export function findTopK(
   topK: number
 ): Array<{ id: string; similarity: number }> {
   const scored = candidates
-    .filter((c) => c.embedding !== null)
+    .filter((c) => c.embedding !== null && c.embedding.length > 0)
     .map((c) => ({
       id: c.id,
       similarity: cosineSimilarity(queryEmbedding, c.embedding!),
