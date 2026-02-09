@@ -121,7 +121,13 @@ switch (cmd) {
       process.exit(1);
     }
     // No command → start MCP server (normal invocation by editor)
-    await startMcpServer();
+    try {
+      await startMcpServer();
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`MEGAMEMORY_ERROR: ${errorMsg}`);
+      process.exit(1);
+    }
     break;
 }
 
@@ -137,7 +143,7 @@ async function startMcpServer() {
   const { z } = await import("zod");
   const path = await import("path");
   const { KnowledgeDB } = await import("./db.js");
-  const { understand, createConcept, updateConcept, link, removeConcept, listRoots, listConflicts, resolveConflict } =
+  const { understand, createConcept, updateConcept, link, removeConcept, listRoots, listConflicts, resolveConflict, formatError } =
     await import("./tools.js");
 
   type NodeKind = import("./types.js").NodeKind;
@@ -177,8 +183,7 @@ async function startMcpServer() {
         const result = await understand(db, { query: params.query, top_k: params.top_k });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -214,8 +219,7 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -241,8 +245,7 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -265,8 +268,7 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -283,8 +285,7 @@ async function startMcpServer() {
         const result = removeConcept(db, { id: params.id, reason: params.reason });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -298,8 +299,7 @@ async function startMcpServer() {
         const result = listRoots(db);
         return { content: [{ type: "text" as const, text: JSON.stringify({ ...result, stats: db.getStats() }, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -313,8 +313,7 @@ async function startMcpServer() {
         const result = listConflicts(db);
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
@@ -340,8 +339,7 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
+        return formatError(err);
       }
     }
   );
