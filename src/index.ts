@@ -177,7 +177,8 @@ async function startMcpServer() {
         const result = await understand(db, { query: params.query, top_k: params.top_k });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -213,7 +214,8 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -239,7 +241,8 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -262,7 +265,8 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -279,7 +283,8 @@ async function startMcpServer() {
         const result = removeConcept(db, { id: params.id, reason: params.reason });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -293,7 +298,8 @@ async function startMcpServer() {
         const result = listRoots(db);
         return { content: [{ type: "text" as const, text: JSON.stringify({ ...result, stats: db.getStats() }, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -307,7 +313,8 @@ async function startMcpServer() {
         const result = listConflicts(db);
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
@@ -333,7 +340,8 @@ async function startMcpServer() {
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }], isError: true };
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }], isError: true };
       }
     }
   );
