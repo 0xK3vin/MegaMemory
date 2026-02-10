@@ -43,10 +43,16 @@ npm install -g megamemory
 
 ### Quick Start
 
-#### With [opencode](https://github.com/anomalyco/opencode)
+```bash
+megamemory install
+```
+
+Interactive installer — choose your editor:
+
+#### With [opencode](https://opencode.ai)
 
 ```bash
-megamemory init
+megamemory install --target opencode
 ```
 
 One command configures everything:
@@ -56,7 +62,27 @@ One command configures everything:
 - Bootstrap command `/user:bootstrap-memory` for initial graph population
 - Save command `/user:save-memory` to persist session knowledge
 
-Restart opencode after running init.
+Restart opencode after running install.
+
+#### With [Claude Code](https://code.claude.com)
+
+```bash
+megamemory install --target claudecode
+```
+
+Configures:
+- MCP server in `~/.claude.json`
+- Workflow instructions in `~/.claude/CLAUDE.md`
+- Commands in `~/.claude/commands/`
+
+#### With [Antigravity](https://idx.google.com)
+
+```bash
+megamemory install --target antigravity
+```
+
+Configures:
+- MCP server in `./mcp_config.json` (workspace-level)
 
 #### With other MCP clients
 
@@ -118,7 +144,7 @@ megamemory serve --port 8080   # custom port
 | Command | Description |
 |---------|-------------|
 | `megamemory` | Start the MCP stdio server |
-| `megamemory init` | Configure opencode integration |
+| `megamemory install` | Configure editor/agent integration |
 | `megamemory serve` | Launch the web graph explorer |
 | `megamemory merge` | Merge two knowledge.db files |
 | `megamemory conflicts` | List unresolved merge conflicts |
@@ -185,7 +211,7 @@ src/
   merge-cli.ts   CLI handlers for merge, conflicts, resolve commands
   types.ts       TypeScript types
   cli-utils.ts   Colored output + interactive prompts
-  init.ts        opencode setup wizard
+  install.ts     multi-target installer (opencode, Claude Code, Antigravity)
   web.ts         HTTP server for graph explorer
 plugin/
   megamemory.ts  Opencode skill tool plugin

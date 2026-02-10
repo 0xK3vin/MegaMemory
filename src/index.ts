@@ -20,13 +20,14 @@ ${pc.bold(pc.cyan("megamemory"))} ${pc.green(`v${VERSION}`)} ${pc.dim("— persi
 
 ${pc.bold("Commands:")}
   ${pc.cyan("(no command)")}    Start the MCP stdio server ${pc.dim("(invoked by your editor)")}
-  ${pc.cyan("init")}            Configure opencode integration
+  ${pc.cyan("install")}         Configure editor/agent integration (interactive)
   ${pc.cyan("serve")}           Start the web graph explorer
   ${pc.cyan("merge")}           Merge two knowledge.db files
   ${pc.cyan("conflicts")}       List unresolved merge conflicts
   ${pc.cyan("resolve")}         Resolve a merge conflict
 
 ${pc.bold("Options:")}
+  ${pc.cyan("--target")} ${pc.dim("NAME")}    Install target (opencode, claudecode, antigravity)
   ${pc.cyan("--port")} ${pc.dim("PORT")}     Port for the web explorer ${pc.dim("(default: 4321)")}
   ${pc.cyan("--into")} ${pc.dim("FILE")}     Output path for merge ${pc.dim("(default: overwrites file1)")}
   ${pc.cyan("--left-label")}    Label for left side in merge ${pc.dim("(default: left)")}
@@ -38,7 +39,8 @@ ${pc.bold("Options:")}
   ${pc.cyan("--version, -v")}   Show version
 
 ${pc.bold("Examples:")}
-  ${pc.dim("$")} megamemory init                                      ${pc.dim("Setup opencode config, plugins, and commands")}
+  ${pc.dim("$")} megamemory install                                   ${pc.dim("Interactive editor integration setup")}
+  ${pc.dim("$")} megamemory install --target claudecode              ${pc.dim("Non-interactive Claude Code setup")}
   ${pc.dim("$")} megamemory serve                                     ${pc.dim(`Open graph explorer at ${pc.underline("http://localhost:4321")}`)}
   ${pc.dim("$")} megamemory serve --port 8080                         ${pc.dim("Custom port")}
   ${pc.dim("$")} megamemory merge main.db feature.db --into merged.db ${pc.dim("Merge two knowledge DBs")}
@@ -46,7 +48,7 @@ ${pc.bold("Examples:")}
   ${pc.dim("$")} megamemory resolve <group-id> --keep left            ${pc.dim("Resolve a conflict")}
 `.trim();
 
-const KNOWN_COMMANDS = new Set(["init", "serve", "merge", "conflicts", "resolve", "--help", "-h", "--version", "-v"]);
+const KNOWN_COMMANDS = new Set(["install", "serve", "merge", "conflicts", "resolve", "--help", "-h", "--version", "-v"]);
 
 function parseFlags(args: string[]): { port?: number; rawPort?: string } {
   const portIdx = args.indexOf("--port");
@@ -58,9 +60,9 @@ function parseFlags(args: string[]): { port?: number; rawPort?: string } {
 const cmd = process.argv[2];
 
 switch (cmd) {
-  case "init": {
-    const { runInit } = await import("./init.js");
-    await runInit();
+  case "install": {
+    const { runInstall } = await import("./install.js");
+    await runInstall(process.argv.slice(3));
     process.exit(0);
     break;
   }
