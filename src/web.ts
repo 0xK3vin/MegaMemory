@@ -122,6 +122,191 @@ export async function runServe(port: number): Promise<void> {
   }
 
   const db = new KnowledgeDB(dbPath);
+  let sseClients: http.ServerResponse[] = [];
+  let lastKnownNodeIds = new Set<string>();
+  let lastKnownNodeUpdates = new Map<string, string>(); // id → updated_at
+  let lastKnownEdgeKeys = new Set<string>(); // "from|to|relation"
+
+  function buildGraphPayload(): {
+    nodes: Array<{
+      id: string;
+      name: string;
+      kind: NodeRow["kind"];
+      summary: string;
+      parent_id: string | null;
+      edge_count: number;
+    }>;
+    edges: Array<{
+      from: string;
+      to: string;
+      relation: string;
+      description: string | null;
+    }>;
+  } {
+    const nodes = db.getAllActiveNodes().map((n) => ({
+      id: n.id,
+      name: n.name,
+      kind: n.kind,
+      summary: n.summary,
+      parent_id: n.parent_id,
+      edge_count: 0,
+    }));
+
+    const edges = db.getAllEdges().map((e) => ({
+      from: e.from_id,
+      to: e.to_id,
+      relation: e.relation,
+      description: e.description,
+    }));
+
+    const edgeCounts = new Map<string, number>();
+    for (const e of edges) {
+      edgeCounts.set(e.from, (edgeCounts.get(e.from) ?? 0) + 1);
+      edgeCounts.set(e.to, (edgeCounts.get(e.to) ?? 0) + 1);
+    }
+    for (const n of nodes) {
+      n.edge_count = edgeCounts.get(n.id) ?? 0;
+    }
+
+    return { nodes, edges };
+  }
+
+  function initializeSseSnapshot(): void {
+    const nodes = db.getAllActiveNodes();
+    const edges = db.getAllEdges();
+
+    lastKnownNodeIds = new Set(nodes.map((n) => n.id));
+    lastKnownNodeUpdates = new Map(nodes.map((n) => [n.id, n.updated_at]));
+    lastKnownEdgeKeys = new Set(edges.map((e) => `${e.from_id}|${e.to_id}|${e.relation}`));
+  }
+
+  function broadcast(event: { type: string; data: unknown }): void {
+    const msg = `data: ${JSON.stringify(event)}\n\n`;
+    sseClients = sseClients.filter((client) => {
+      try {
+        client.write(msg);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function detectChanges(): void {
+    try {
+      const nodes = db.getAllActiveNodes();
+      const edges = db.getAllEdges();
+
+      const currentNodeIds = new Set(nodes.map((n) => n.id));
+      const currentNodeUpdates = new Map(nodes.map((n) => [n.id, n.updated_at]));
+      const currentEdgeKeys = new Set(edges.map((e) => `${e.from_id}|${e.to_id}|${e.relation}`));
+
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const edgeByKey = new Map(edges.map((e) => [`${e.from_id}|${e.to_id}|${e.relation}`, e]));
+
+      const edgeCounts = new Map<string, number>();
+      for (const e of edges) {
+        edgeCounts.set(e.from_id, (edgeCounts.get(e.from_id) ?? 0) + 1);
+        edgeCounts.set(e.to_id, (edgeCounts.get(e.to_id) ?? 0) + 1);
+      }
+
+      let hasChanges = false;
+
+      for (const id of currentNodeIds) {
+        if (!lastKnownNodeIds.has(id)) {
+          const node = nodeById.get(id);
+          if (!node) continue;
+          broadcast({
+            type: "node_added",
+            data: {
+              id: node.id,
+              name: node.name,
+              kind: node.kind,
+              summary: node.summary,
+              parent_id: node.parent_id,
+              edge_count: edgeCounts.get(node.id) ?? 0,
+            },
+          });
+          hasChanges = true;
+        }
+      }
+
+      for (const [id, updatedAt] of currentNodeUpdates) {
+        if (!lastKnownNodeIds.has(id)) continue;
+        if ((lastKnownNodeUpdates.get(id) ?? "") !== updatedAt) {
+          const node = nodeById.get(id);
+          if (!node) continue;
+          broadcast({
+            type: "node_updated",
+            data: {
+              id: node.id,
+              name: node.name,
+              kind: node.kind,
+              summary: node.summary,
+            },
+          });
+          hasChanges = true;
+        }
+      }
+
+      for (const id of lastKnownNodeIds) {
+        if (!currentNodeIds.has(id)) {
+          broadcast({ type: "node_removed", data: { id } });
+          hasChanges = true;
+        }
+      }
+
+      for (const key of currentEdgeKeys) {
+        if (!lastKnownEdgeKeys.has(key)) {
+          const edge = edgeByKey.get(key);
+          if (!edge) continue;
+          broadcast({
+            type: "edge_added",
+            data: {
+              from: edge.from_id,
+              to: edge.to_id,
+              relation: edge.relation,
+              description: edge.description,
+            },
+          });
+          hasChanges = true;
+        }
+      }
+
+      for (const key of lastKnownEdgeKeys) {
+        if (!currentEdgeKeys.has(key)) {
+          const [from, to, relation] = key.split("|");
+          broadcast({
+            type: "edge_removed",
+            data: { from, to, relation },
+          });
+          hasChanges = true;
+        }
+      }
+
+      lastKnownNodeIds = currentNodeIds;
+      lastKnownNodeUpdates = currentNodeUpdates;
+      lastKnownEdgeKeys = currentEdgeKeys;
+
+      if (hasChanges) {
+        const stats = db.getStats();
+        const kinds = db.getKindsBreakdown();
+        broadcast({
+          type: "stats",
+          data: {
+            nodes: stats.nodes,
+            edges: stats.edges,
+            removed: stats.removed,
+            kinds,
+          },
+        });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(pc.red(`  SSE change detection failed: ${message}`));
+    }
+  }
+
   const htmlPath = resolveHtmlPath();
 
   if (!fs.existsSync(htmlPath)) {
@@ -160,32 +345,7 @@ export async function runServe(port: number): Promise<void> {
     }
 
     if (pathname === "/api/graph" && req.method === "GET") {
-      const nodes = db.getAllActiveNodes().map((n) => ({
-        id: n.id,
-        name: n.name,
-        kind: n.kind,
-        summary: n.summary,
-        parent_id: n.parent_id,
-        edge_count: 0, // filled below
-      }));
-
-      const edges = db.getAllEdges().map((e) => ({
-        from: e.from_id,
-        to: e.to_id,
-        relation: e.relation,
-        description: e.description,
-      }));
-
-      // Count edges per node
-      const edgeCounts = new Map<string, number>();
-      for (const e of edges) {
-        edgeCounts.set(e.from, (edgeCounts.get(e.from) ?? 0) + 1);
-        edgeCounts.set(e.to, (edgeCounts.get(e.to) ?? 0) + 1);
-      }
-      for (const n of nodes) {
-        n.edge_count = edgeCounts.get(n.id) ?? 0;
-      }
-
+      const { nodes, edges } = buildGraphPayload();
       json(res, { nodes, edges });
       return;
     }
@@ -250,6 +410,37 @@ export async function runServe(port: number): Promise<void> {
       return;
     }
 
+    if (pathname === "/api/events" && req.method === "GET") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+
+      const { nodes, edges } = buildGraphPayload();
+      const stats = db.getStats();
+      const kinds = db.getKindsBreakdown();
+      const initPayload = {
+        nodes,
+        edges,
+        stats: {
+          nodes: stats.nodes,
+          edges: stats.edges,
+          removed: stats.removed,
+        },
+        kinds,
+      };
+      res.write(`data: ${JSON.stringify({ type: "init", data: initPayload })}\n\n`);
+
+      sseClients.push(res);
+
+      req.on("close", () => {
+        sseClients = sseClients.filter((client) => client !== res);
+      });
+      return;
+    }
+
     notFound(res);
     })().catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -258,16 +449,47 @@ export async function runServe(port: number): Promise<void> {
     });
   });
 
+  initializeSseSnapshot();
+  const pollInterval = setInterval(detectChanges, 1500);
+  const heartbeatInterval = setInterval(() => {
+    sseClients = sseClients.filter((client) => {
+      try {
+        client.write(": heartbeat\n\n");
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }, 30000);
+
   await listenWithRetry(server, port, dbPath);
 
   // Graceful shutdown
   process.on("SIGINT", () => {
     console.log(pc.dim("\n  Shutting down...\n"));
+    clearInterval(pollInterval);
+    clearInterval(heartbeatInterval);
+    for (const client of sseClients) {
+      try {
+        client.end();
+      } catch {
+        // noop
+      }
+    }
     server.close();
     db.close();
     process.exit(0);
   });
   process.on("SIGTERM", () => {
+    clearInterval(pollInterval);
+    clearInterval(heartbeatInterval);
+    for (const client of sseClients) {
+      try {
+        client.end();
+      } catch {
+        // noop
+      }
+    }
     server.close();
     db.close();
     process.exit(0);
