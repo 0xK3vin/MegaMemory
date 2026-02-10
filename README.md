@@ -6,6 +6,8 @@
   <a href="https://www.npmjs.com/package/megamemory"><img alt="npm" src="https://img.shields.io/npm/v/megamemory?style=flat-square" /></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/npm/l/megamemory?style=flat-square" /></a>
   <a href="https://nodejs.org"><img alt="node" src="https://img.shields.io/node/v/megamemory?style=flat-square" /></a>
+  <a href="https://www.npmjs.com/package/megamemory"><img alt="npm downloads" src="https://img.shields.io/npm/dm/megamemory?style=flat-square" /></a>
+  <a href="https://x.com/M3ruH4sh"><img alt="Twitter Follow" src="https://img.shields.io/twitter/follow/M3ruH4sh?style=social" /></a>
 </p>
 
 <p align="center">
@@ -20,9 +22,11 @@ The LLM is the indexer. No AST parsing. No static analysis. Your agent reads cod
 
 ### The Loop
 
-```
-understand → work → update
-```
+<p align="center">
+  <img src="./assets/how-it-works.svg" alt="How MegaMemory works" width="800" />
+</p>
+
+`understand → work → update`
 
 1. **Session start** — agent calls `list_roots` to orient itself
 2. **Before a task** — agent calls `understand` with a natural language query
@@ -117,6 +121,12 @@ Add megamemory as a stdio MCP server. The command is just `megamemory` (no argum
 
 **Relationship types:** `connects_to` · `depends_on` · `implements` · `calls` · `configured_by`
 
+### Knowledge Graph
+
+<p align="center">
+  <img src="./assets/knowledge-graph.svg" alt="MegaMemory knowledge graph example" width="800" />
+</p>
+
 ---
 
 ### Web Explorer
@@ -200,6 +210,10 @@ The agent does NOT just pick a side — it reads the code and writes the truth. 
 ---
 
 ### How It Works
+
+<p align="center">
+  <img src="./assets/architecture.svg" alt="MegaMemory architecture diagram" width="800" />
+</p>
 
 ```
 src/

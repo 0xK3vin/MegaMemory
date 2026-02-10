@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 480" role="img" aria-labelledby="title desc">
+  <title id="title">Knowledge Graph</title>
+  <desc id="desc">Minimal node-link view of concepts and typed relationships.</desc>
+  <defs>
+    <marker id="arrowhead" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L7 3.5 L0 7 Z" fill="#30363d"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="800" height="480" fill="#0d1117"/>
+
+  <text x="400" y="52" text-anchor="middle" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="36" font-weight="600">Knowledge Graph</text>
+  <text x="400" y="80" text-anchor="middle" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="18" font-weight="400">Concepts and relationships your agent builds</text>
+
+  <line x1="220" y1="178" x2="330" y2="138" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="262" y="152" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">depends_on</text>
+
+  <line x1="470" y1="138" x2="400" y2="238" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="446" y="208" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">calls</text>
+
+  <line x1="400" y1="296" x2="400" y2="356" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="408" y="334" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">implements</text>
+
+  <line x1="580" y1="178" x2="470" y2="138" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="512" y="156" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">connects_to</text>
+
+  <line x1="580" y1="328" x2="470" y2="388" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="520" y="366" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">configured_by</text>
+
+  <line x1="220" y1="328" x2="326" y2="380" stroke="#30363d" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+  <text x="254" y="362" fill="#8b949e" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">depends_on</text>
+
+  <rect x="80" y="150" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="80" y="150" width="3" height="56" rx="8" fill="#58a6ff"/>
+  <text x="94" y="174" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">Auth Handler</text>
+  <rect x="94" y="182" width="52" height="18" rx="6" fill="rgba(88,166,255,0.15)"/>
+  <text x="120" y="195" text-anchor="middle" fill="#58a6ff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">feature</text>
+
+  <rect x="330" y="110" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="330" y="110" width="3" height="56" rx="8" fill="#bc8cff"/>
+  <text x="344" y="134" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">MCP Server</text>
+  <rect x="344" y="142" width="50" height="18" rx="6" fill="rgba(188,140,255,0.15)"/>
+  <text x="369" y="155" text-anchor="middle" fill="#bc8cff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">module</text>
+
+  <rect x="580" y="150" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="580" y="150" width="3" height="56" rx="8" fill="#58a6ff"/>
+  <text x="594" y="174" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">Web Explorer</text>
+  <rect x="594" y="182" width="52" height="18" rx="6" fill="rgba(88,166,255,0.15)"/>
+  <text x="620" y="195" text-anchor="middle" fill="#58a6ff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">feature</text>
+
+  <rect x="330" y="240" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="330" y="240" width="3" height="56" rx="8" fill="#3fb950"/>
+  <text x="344" y="264" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">CLI Router</text>
+  <rect x="344" y="272" width="66" height="18" rx="6" fill="rgba(63,185,80,0.15)"/>
+  <text x="377" y="285" text-anchor="middle" fill="#3fb950" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">component</text>
+
+  <rect x="580" y="300" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="580" y="300" width="3" height="56" rx="8" fill="#d29922"/>
+  <text x="594" y="324" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">DB Config</text>
+  <rect x="594" y="332" width="46" height="18" rx="6" fill="rgba(210,153,34,0.15)"/>
+  <text x="617" y="345" text-anchor="middle" fill="#d29922" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">config</text>
+
+  <rect x="330" y="360" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="330" y="360" width="3" height="56" rx="8" fill="#bc8cff"/>
+  <text x="344" y="384" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">Database</text>
+  <rect x="344" y="392" width="50" height="18" rx="6" fill="rgba(188,140,255,0.15)"/>
+  <text x="369" y="405" text-anchor="middle" fill="#bc8cff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">module</text>
+
+  <rect x="80" y="300" width="140" height="56" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1"/>
+  <rect x="80" y="300" width="3" height="56" rx="8" fill="#f778ba"/>
+  <text x="94" y="324" fill="#e6edf3" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" font-weight="600">Soft Delete</text>
+  <rect x="94" y="332" width="50" height="18" rx="6" fill="rgba(247,120,186,0.15)"/>
+  <text x="119" y="345" text-anchor="middle" fill="#f778ba" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="11" font-weight="500">pattern</text>
+
+  <rect x="144" y="438" width="78" height="24" rx="6" fill="rgba(88,166,255,0.15)"/>
+  <text x="183" y="454" text-anchor="middle" fill="#58a6ff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500">feature</text>
+
+  <rect x="232" y="438" width="74" height="24" rx="6" fill="rgba(188,140,255,0.15)"/>
+  <text x="269" y="454" text-anchor="middle" fill="#bc8cff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500">module</text>
+
+  <rect x="316" y="438" width="74" height="24" rx="6" fill="rgba(247,120,186,0.15)"/>
+  <text x="353" y="454" text-anchor="middle" fill="#f778ba" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500">pattern</text>
+
+  <rect x="400" y="438" width="68" height="24" rx="6" fill="rgba(210,153,34,0.15)"/>
+  <text x="434" y="454" text-anchor="middle" fill="#d29922" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500">config</text>
+
+  <rect x="478" y="438" width="76" height="24" rx="6" fill="rgba(121,192,255,0.15)"/>
+  <text x="516" y="454" text-anchor="middle" fill="#79c0ff" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500">decision</text>
+
+  <rect x="564" y="438" width="92" height="24" rx="6" fill="rgba(63,185,80,0.15)"/>
+  <text x="610" y="454" text-anchor="middle" fill="#3fb950" font-family="'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="500">component</text>
+</svg>
