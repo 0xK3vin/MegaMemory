@@ -17,6 +17,10 @@ async function getExtractor(): Promise<FeatureExtractionPipeline> {
   return extractor;
 }
 
+export async function initializeEmbeddings(): Promise<void> {
+  await getExtractor();
+}
+
 /**
  * Generate an embedding vector for given text.
  * Returns a Buffer containing float32 values.

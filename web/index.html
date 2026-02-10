@@ -47,10 +47,16 @@
     white-space: nowrap;
   }
 
-  #search {
+  .search-shell {
     flex: 1;
-    max-width: 400px;
+    max-width: 520px;
+    position: relative;
+  }
+
+  #search {
+    width: 100%;
     padding: 6px 12px;
+    padding-right: 30px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -62,6 +68,117 @@
 
   #search:focus { border-color: var(--accent); }
   #search::placeholder { color: var(--text-muted); }
+
+  #search-loading {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    width: 12px;
+    height: 12px;
+    margin-top: -6px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    animation: spin 0.7s linear infinite;
+  }
+
+  #search-loading.visible { opacity: 1; }
+
+  #search-results {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+    max-height: 320px;
+    overflow-y: auto;
+    display: none;
+    z-index: 30;
+  }
+
+  #search-results.open { display: block; }
+
+  .search-result {
+    display: block;
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+    color: var(--text);
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  .search-result:last-child { border-bottom: 0; }
+  .search-result:hover,
+  .search-result.active { background: var(--surface2); }
+
+  .search-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 5px;
+  }
+
+  .search-name {
+    font-size: 12px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .search-kind {
+    display: inline-block;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-radius: 999px;
+    padding: 2px 6px;
+    white-space: nowrap;
+  }
+
+  .search-summary {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    margin-bottom: 4px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .search-similarity {
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .search-empty {
+    padding: 12px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .search-error {
+    padding: 12px;
+    font-size: 12px;
+    color: #fca5a5;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
 
   .version {
     margin-left: auto;
@@ -253,7 +370,11 @@
 
 <header>
   <span class="logo">MegaMemory</span>
-  <input id="search" type="text" placeholder="Search concepts..." />
+  <div class="search-shell" id="search-shell">
+    <input id="search" type="text" placeholder="Search concepts semantically..." autocomplete="off" />
+    <span id="search-loading" aria-hidden="true"></span>
+    <div id="search-results"></div>
+  </div>
   <span class="version">v{{VERSION}}</span>
 </header>
 
@@ -281,12 +402,21 @@ const KIND_COLORS = {
 };
 
 let cy = null;
+let searchResults = [];
+let activeSearchIndex = -1;
+let searchRequestId = 0;
 
 // ---- API ----
 
 async function fetchGraph() { return (await fetch('/api/graph')).json(); }
 async function fetchNode(id) { return (await fetch('/api/node/' + id)).json(); }
 async function fetchStats() { return (await fetch('/api/stats')).json(); }
+async function fetchSemanticSearch(query, topK) {
+  const params = new URLSearchParams({ q: query, top_k: String(topK) });
+  const response = await fetch('/api/search?' + params.toString());
+  const data = await response.json();
+  return { ok: response.ok, status: response.status, data };
+}
 
 // ---- Stats footer ----
 
@@ -459,7 +589,7 @@ const STYLE = [
   // Dimmed (search)
   {
     selector: 'node.dimmed',
-    style: { 'opacity': 0.12 },
+    style: { 'opacity': 0.08 },
   },
   {
     selector: 'edge.dimmed',
@@ -469,9 +599,12 @@ const STYLE = [
   {
     selector: 'node.highlighted',
     style: {
-      'border-width': 2,
+      'border-width': 4,
       'border-color': '#f59e0b',
       'border-opacity': 1,
+      'underlay-color': '#f59e0b',
+      'underlay-opacity': 0.22,
+      'underlay-padding': 5,
       'color': '#e2e8f0',
     },
   },
@@ -672,35 +805,274 @@ function navigateTo(id) {
 
 // ---- Search ----
 
+function setSearchLoading(loading) {
+  const spinner = document.getElementById('search-loading');
+  spinner.classList.toggle('visible', Boolean(loading));
+}
+
+function clearSearchHighlight() {
+  if (!cy) return;
+  cy.elements().removeClass('dimmed highlighted');
+}
+
+function highlightSearchMatches(matches) {
+  if (!cy) return;
+  if (!matches.length) {
+    clearSearchHighlight();
+    return;
+  }
+
+  const ids = new Set(matches.map(m => m.id));
+  cy.batch(() => {
+    cy.elements().addClass('dimmed').removeClass('highlighted');
+    cy.nodes().forEach(node => {
+      if (!ids.has(node.id())) return;
+      node.removeClass('dimmed').addClass('highlighted');
+      node.connectedEdges().removeClass('dimmed');
+    });
+  });
+}
+
+function closeSearchResults() {
+  const resultsEl = document.getElementById('search-results');
+  resultsEl.classList.remove('open');
+}
+
+function setActiveSearchResult(index) {
+  const resultsEl = document.getElementById('search-results');
+  const rows = resultsEl.querySelectorAll('.search-result');
+  rows.forEach(row => row.classList.remove('active'));
+
+  if (index < 0 || index >= rows.length) {
+    activeSearchIndex = -1;
+    return;
+  }
+
+  activeSearchIndex = index;
+  const row = rows[index];
+  row.classList.add('active');
+  row.scrollIntoView({ block: 'nearest' });
+}
+
+function renderSearchResults(query, matches, mode) {
+  const resultsEl = document.getElementById('search-results');
+
+  if (!query) {
+    resultsEl.innerHTML = '';
+    resultsEl.classList.remove('open');
+    return;
+  }
+
+  if (!matches.length) {
+    resultsEl.innerHTML = `<div class="search-empty">No semantic matches found.</div>`;
+    resultsEl.classList.add('open');
+    activeSearchIndex = -1;
+    return;
+  }
+
+  const rows = matches.map((m, i) => {
+    const color = KIND_COLORS[m.kind] || '#888';
+    const hasScore = Number.isFinite(m.similarity);
+    const score = hasScore ? Math.max(0, Math.min(1, m.similarity)) : 0;
+    const scorePct = (score * 100).toFixed(1);
+    const metric = hasScore
+      ? `similarity: ${scorePct}%`
+      : (mode === 'keyword-fallback' ? 'keyword fallback' : '');
+    return `
+      <button class="search-result" type="button" data-index="${i}" data-id="${esc(m.id)}">
+        <div class="search-row">
+          <span class="search-name">${esc(m.name)}</span>
+          <span class="search-kind" style="background:${color}22;color:${color};border:1px solid ${color}44">${esc(m.kind)}</span>
+        </div>
+        <div class="search-summary">${esc(m.summary || '')}</div>
+        ${metric ? `<div class="search-similarity">${metric}</div>` : ''}
+      </button>
+    `;
+  });
+
+  resultsEl.innerHTML = rows.join('');
+  resultsEl.classList.add('open');
+  setActiveSearchResult(0);
+}
+
+function localFallbackMatches(query, limit) {
+  if (!cy) return [];
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+
+  const matches = [];
+  cy.nodes().forEach(node => {
+    const haystack = [
+      node.data('name') || '',
+      node.data('summary') || '',
+      node.data('kind') || '',
+    ].join(' ').toLowerCase();
+
+    if (!terms.every(term => haystack.includes(term))) return;
+
+    matches.push({
+      id: node.id(),
+      name: node.data('name') || node.id(),
+      kind: node.data('kind') || 'feature',
+      summary: node.data('summary') || '',
+    });
+  });
+
+  return matches.slice(0, limit);
+}
+
+function renderSearchError(query, message) {
+  const resultsEl = document.getElementById('search-results');
+  if (!query) {
+    resultsEl.innerHTML = '';
+    resultsEl.classList.remove('open');
+    return;
+  }
+  resultsEl.innerHTML = `<div class="search-error">${esc(message || 'Semantic search failed.')}</div>`;
+  resultsEl.classList.add('open');
+  activeSearchIndex = -1;
+}
+
+function chooseSearchResult(index) {
+  if (index < 0 || index >= searchResults.length) return;
+  const selected = searchResults[index];
+  navigateTo(selected.id);
+  closeSearchResults();
+}
+
 function setupSearch() {
   const input = document.getElementById('search');
+  const shell = document.getElementById('search-shell');
+  const resultsEl = document.getElementById('search-results');
   let timer = null;
 
-  input.addEventListener('input', () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      const q = input.value.trim().toLowerCase();
-      if (!cy) return;
+  async function runSearch(query) {
+    const requestId = ++searchRequestId;
+    if (!query) {
+      searchResults = [];
+      activeSearchIndex = -1;
+      setSearchLoading(false);
+      renderSearchResults('', []);
+      clearSearchHighlight();
+      return;
+    }
 
-      if (!q) {
-        cy.elements().removeClass('dimmed highlighted');
+    setSearchLoading(true);
+    try {
+      const response = await fetchSemanticSearch(query, 10);
+      if (requestId !== searchRequestId) return;
+
+      if (!response.ok || response.data.error) {
+        const fallback = localFallbackMatches(query, 10);
+        if (fallback.length > 0) {
+          searchResults = fallback;
+          renderSearchResults(query, searchResults, 'keyword-fallback');
+          highlightSearchMatches(searchResults);
+          return;
+        }
+
+        const detail = response.data && response.data.detail ? ` (${response.data.detail})` : '';
+        renderSearchError(query, `Semantic search unavailable${detail}`);
+        searchResults = [];
+        clearSearchHighlight();
         return;
       }
 
-      cy.batch(() => {
-        cy.elements().addClass('dimmed');
-        cy.nodes().forEach(node => {
-          const name = (node.data('name') || '').toLowerCase();
-          const summary = (node.data('summary') || '').toLowerCase();
-          const kind = (node.data('kind') || '').toLowerCase();
-          if (name.includes(q) || summary.includes(q) || kind.includes(q)) {
-            node.removeClass('dimmed').addClass('highlighted');
-            node.connectedEdges().removeClass('dimmed');
-            node.neighborhood('node').removeClass('dimmed');
-          }
-        });
-      });
-    }, 150);
+      const semanticMatches = Array.isArray(response.data.matches) ? response.data.matches : [];
+      if (semanticMatches.length === 0) {
+        const fallback = localFallbackMatches(query, 10);
+        if (fallback.length > 0) {
+          searchResults = fallback;
+          renderSearchResults(query, searchResults, 'keyword-fallback');
+          highlightSearchMatches(searchResults);
+          return;
+        }
+      }
+
+      searchResults = semanticMatches;
+      renderSearchResults(query, searchResults);
+      highlightSearchMatches(searchResults);
+    } catch (err) {
+      if (requestId !== searchRequestId) return;
+      console.error('Semantic search failed:', err);
+      searchResults = [];
+      renderSearchError(query, 'Semantic search failed. Check server logs and try again.');
+      clearSearchHighlight();
+    } finally {
+      if (requestId === searchRequestId) {
+        setSearchLoading(false);
+      }
+    }
+  }
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const query = input.value.trim();
+    timer = setTimeout(() => { runSearch(query); }, 300);
+  });
+
+  input.addEventListener('keydown', (event) => {
+    if (!resultsEl.classList.contains('open')) {
+      if (event.key === 'Enter') {
+        const query = input.value.trim();
+        if (query) {
+          clearTimeout(timer);
+          runSearch(query);
+        }
+      }
+      return;
+    }
+
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!searchResults.length) return;
+      const nextIndex = activeSearchIndex < searchResults.length - 1
+        ? activeSearchIndex + 1
+        : 0;
+      setActiveSearchResult(nextIndex);
+      return;
+    }
+
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!searchResults.length) return;
+      const nextIndex = activeSearchIndex > 0
+        ? activeSearchIndex - 1
+        : searchResults.length - 1;
+      setActiveSearchResult(nextIndex);
+      return;
+    }
+
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      chooseSearchResult(activeSearchIndex >= 0 ? activeSearchIndex : 0);
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      closeSearchResults();
+    }
+  });
+
+  input.addEventListener('focus', () => {
+    if (input.value.trim() && (searchResults.length > 0 || resultsEl.innerHTML)) {
+      resultsEl.classList.add('open');
+    }
+  });
+
+  resultsEl.addEventListener('click', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest('.search-result');
+    if (!button) return;
+    const index = Number.parseInt(button.dataset.index, 10);
+    if (!Number.isNaN(index)) chooseSearchResult(index);
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!shell.contains(event.target)) {
+      closeSearchResults();
+    }
   });
 }
 

@@ -4,8 +4,9 @@ import path from "path";
 import { fileURLToPath } from "url";
 import pc from "picocolors";
 import { KnowledgeDB } from "./db.js";
-import { buildNodeWithContext } from "./tools.js";
+import { buildNodeWithContext, understand } from "./tools.js";
 import { errorBold, askPort } from "./cli-utils.js";
+import { initializeEmbeddings } from "./embeddings.js";
 import type { NodeRow } from "./types.js";
 
 const VERSION = JSON.parse(
@@ -132,7 +133,22 @@ export async function runServe(port: number): Promise<void> {
 
   const htmlContent = fs.readFileSync(htmlPath, "utf-8").replaceAll("{{VERSION}}", VERSION);
 
+  let embeddingsReady = false;
+  let embeddingInitError: string | null = null;
+
+  console.log(pc.dim("  Loading embedding model..."));
+  try {
+    await initializeEmbeddings();
+    embeddingsReady = true;
+    console.log(pc.dim("  Embedding model ready."));
+  } catch (err) {
+    embeddingInitError = err instanceof Error ? err.message : String(err);
+    console.log(pc.yellow("  Warning: Embedding model failed to preload."));
+    console.log(pc.dim("  Semantic search will retry on demand."));
+  }
+
   const server = http.createServer((req, res) => {
+    void (async () => {
     const url = new URL(req.url ?? "/", `http://localhost:${port}`);
     const pathname = url.pathname;
 
@@ -174,6 +190,40 @@ export async function runServe(port: number): Promise<void> {
       return;
     }
 
+    if (pathname === "/api/search" && req.method === "GET") {
+      const query = (url.searchParams.get("q") ?? "").trim();
+      const rawTopK = Number.parseInt(url.searchParams.get("top_k") ?? "10", 10);
+      const topK = Number.isFinite(rawTopK) ? Math.min(50, Math.max(1, rawTopK)) : 10;
+
+      if (query.length === 0) {
+        json(res, { matches: [] });
+        return;
+      }
+
+      if (!embeddingsReady) {
+        try {
+          await initializeEmbeddings();
+          embeddingsReady = true;
+          embeddingInitError = null;
+        } catch (err) {
+          embeddingInitError = err instanceof Error ? err.message : String(err);
+          json(
+            res,
+            {
+              error: "Semantic search is temporarily unavailable",
+              detail: embeddingInitError,
+            },
+            503,
+          );
+          return;
+        }
+      }
+
+      const results = await understand(db, { query, top_k: topK });
+      json(res, results);
+      return;
+    }
+
     if (pathname.startsWith("/api/node/") && req.method === "GET") {
       const id = decodeURIComponent(pathname.slice("/api/node/".length));
       const node = db.getNode(id);
@@ -201,6 +251,11 @@ export async function runServe(port: number): Promise<void> {
     }
 
     notFound(res);
+    })().catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(pc.red(`  Web request failed: ${message}`));
+      json(res, { error: "Internal server error" }, 500);
+    });
   });
 
   await listenWithRetry(server, port, dbPath);
