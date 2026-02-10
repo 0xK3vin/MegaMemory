@@ -17,6 +17,14 @@ import type {
 } from "./types.js";
 import { stripMergeSuffix } from "./merge.js";
 
+export function formatError(err: unknown): { content: Array<{ type: "text"; text: string }>; isError: true } {
+  const errorMsg = err instanceof Error ? err.message : String(err);
+  return {
+    content: [{ type: "text" as const, text: `MEGAMEMORY_ERROR: ${errorMsg}` }],
+    isError: true,
+  };
+}
+
 /**
  * Generate a slug ID from a name, optionally prefixed with parent ID.
  * Converts underscores and spaces to hyphens, lowercases, strips non-alphanumeric.
