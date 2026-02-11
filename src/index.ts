@@ -22,6 +22,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("(no command)")}    Start the MCP stdio server ${pc.dim("(invoked by your editor)")}
   ${pc.cyan("install")}         Configure editor/agent integration (interactive)
   ${pc.cyan("serve")}           Start the web graph explorer
+  ${pc.cyan("stats")}           Show knowledge graph statistics
   ${pc.cyan("merge")}           Merge two knowledge.db files
   ${pc.cyan("conflicts")}       List unresolved merge conflicts
   ${pc.cyan("resolve")}         Resolve a merge conflict
@@ -34,7 +35,7 @@ ${pc.bold("Options:")}
   ${pc.cyan("--right-label")}   Label for right side in merge ${pc.dim("(default: right)")}
   ${pc.cyan("--keep")}          Resolution strategy: left, right, or both
   ${pc.cyan("--json")}          Machine-readable output for conflicts
-  ${pc.cyan("--db")} ${pc.dim("PATH")}       Database path for conflicts/resolve
+  ${pc.cyan("--db")} ${pc.dim("PATH")}       Database path for stats/conflicts/resolve
   ${pc.cyan("--help, -h")}      Show this help
   ${pc.cyan("--version, -v")}   Show version
 
@@ -48,7 +49,7 @@ ${pc.bold("Examples:")}
   ${pc.dim("$")} megamemory resolve <group-id> --keep left            ${pc.dim("Resolve a conflict")}
 `.trim();
 
-const KNOWN_COMMANDS = new Set(["install", "serve", "merge", "conflicts", "resolve", "--help", "-h", "--version", "-v"]);
+const KNOWN_COMMANDS = new Set(["install", "serve", "stats", "merge", "conflicts", "resolve", "--help", "-h", "--version", "-v"]);
 
 function parseFlags(args: string[]): { port?: number; rawPort?: string } {
   const portIdx = args.indexOf("--port");
@@ -79,6 +80,13 @@ switch (cmd) {
 
     const { runServe } = await import("./web.js");
     await runServe(port);
+    break;
+  }
+
+  case "stats": {
+    const { runStats } = await import("./stats.js");
+    runStats(process.argv.slice(3));
+    process.exit(0);
     break;
   }
 

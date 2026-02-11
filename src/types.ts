@@ -133,12 +133,7 @@ export interface ListRootsOutput {
     name: string;
     kind: NodeKind;
     summary: string;
-    children: Array<{
-      id: string;
-      name: string;
-      kind: NodeKind;
-      summary: string;
-    }>;
+    children: string[];
   }>;
 }
 

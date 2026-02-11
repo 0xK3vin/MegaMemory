@@ -268,12 +268,7 @@ export function listRoots(db: KnowledgeDB): ListRootsOutput & { hint?: string } 
   const rootRows = db.getRootNodes();
 
   const roots = rootRows.map((root) => {
-    const children = db.getChildren(root.id).map((c) => ({
-      id: c.id,
-      name: c.name,
-      kind: c.kind as NodeWithContext["kind"],
-      summary: c.summary,
-    }));
+    const children = db.getChildren(root.id).map((c) => c.name);
 
     return {
       id: root.id,
