@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>megamemory explorer</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.4/cytoscape.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -195,18 +195,35 @@
   }
 
   #graph {
-    flex: 1;
-    min-width: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  #floating-labels {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
     overflow: hidden;
-    background-color: var(--bg);
-    /* Grid layers: 1) small dots, 2) vertical major lines, 3) horizontal major lines */
-    background-image:
-      radial-gradient(circle, #1e2230 1px, transparent 1px),
-      linear-gradient(to right, #181c28 1px, transparent 1px),
-      linear-gradient(to bottom, #181c28 1px, transparent 1px);
-    /* Defaults — overwritten by JS on viewport changes */
-    background-size: 20px 20px, 100px 100px, 100px 100px;
-    background-position: 0 0, 0 0, 0 0;
+  }
+
+  .floating-label {
+    position: absolute;
+    font-family: monospace;
+    font-size: 10px;
+    pointer-events: none;
+    animation: float-up 1.8s ease-out forwards;
+  }
+
+  @keyframes float-up {
+    0% { opacity: 0.9; transform: translateY(0) translateX(-50%); }
+    100% { opacity: 0; transform: translateY(-30px) translateX(-50%); }
   }
 
   /* ---- Panel ---- */
@@ -218,6 +235,8 @@
     padding: 20px;
     display: none;
     flex-shrink: 0;
+    margin-left: auto;
+    z-index: 5;
   }
 
   #panel.open { display: block; }
@@ -379,7 +398,8 @@
 </header>
 
 <main>
-  <div id="graph"></div>
+  <canvas id="graph"></canvas>
+  <div id="floating-labels"></div>
   <div id="empty-state">
     <h2>Graph is empty</h2>
     <p>Run <code>/user:bootstrap-memory</code> in opencode to populate,<br/>or create concepts as you work.</p>
@@ -393,29 +413,306 @@
 
 <script>
 const KIND_COLORS = {
-  feature:   '#3b82f6',
-  module:    '#22c55e',
-  pattern:   '#a855f7',
-  config:    '#f59e0b',
-  decision:  '#ef4444',
+  feature: '#3b82f6',
+  module: '#22c55e',
+  pattern: '#a855f7',
+  config: '#f59e0b',
+  decision: '#ef4444',
   component: '#14b8a6',
 };
 
-let cy = null;
+let canvas = null;
+let ctx = null;
+let simulation = null;
+let width = 0;
+let height = 0;
+let dpr = 1;
+
+let panX = 0;
+let panY = 0;
+let zoom = 1;
+
+let nodes = [];
+let edges = [];
+let nodeMap = new Map();
+
+let dragNode = null;
+let isPanning = false;
+let pointerDown = false;
+let movedSinceDown = false;
+let lastPointer = { x: 0, y: 0 };
+let hoverNode = null;
+
+let cameraAnimation = null;
+let renderHandle = null;
+
 let searchResults = [];
 let activeSearchIndex = -1;
 let searchRequestId = 0;
+let evtSource = null;
+let sseConnected = false;
 
 // ---- API ----
 
 async function fetchGraph() { return (await fetch('/api/graph')).json(); }
-async function fetchNode(id) { return (await fetch('/api/node/' + id)).json(); }
+async function fetchNode(id) { return (await fetch('/api/node/' + encodeURIComponent(id))).json(); }
 async function fetchStats() { return (await fetch('/api/stats')).json(); }
 async function fetchSemanticSearch(query, topK) {
   const params = new URLSearchParams({ q: query, top_k: String(topK) });
   const response = await fetch('/api/search?' + params.toString());
   const data = await response.json();
   return { ok: response.ok, status: response.status, data };
+}
+
+function setEmptyStateVisible(visible) {
+  const el = document.getElementById('empty-state');
+  if (!el) return;
+  el.classList.toggle('visible', Boolean(visible));
+}
+
+function connectSSE() {
+  if (typeof window.EventSource === 'undefined') return;
+  if (evtSource) evtSource.close();
+
+  evtSource = new EventSource('/api/events');
+
+  evtSource.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleSSE(msg);
+    } catch (err) {
+      console.error('Failed to parse SSE payload:', err);
+    }
+  };
+
+  evtSource.onopen = () => {
+    sseConnected = true;
+  };
+
+  evtSource.onerror = () => {
+    sseConnected = false;
+  };
+}
+
+function handleSSE(msg) {
+  if (!msg || !msg.type) return;
+  switch (msg.type) {
+    case 'init':
+      handleSseInit(msg.data);
+      break;
+    case 'node_added':
+      handleNodeAdded(msg.data);
+      break;
+    case 'node_updated':
+      handleNodeUpdated(msg.data);
+      break;
+    case 'node_removed':
+      handleNodeRemoved(msg.data);
+      break;
+    case 'edge_added':
+      handleEdgeAdded(msg.data);
+      break;
+    case 'edge_removed':
+      handleEdgeRemoved(msg.data);
+      break;
+    case 'stats':
+      renderStats(msg.data);
+      break;
+    default:
+      break;
+  }
+}
+
+function edgeEndpointId(endpoint) {
+  if (!endpoint) return '';
+  return typeof endpoint === 'string' ? endpoint : endpoint.id;
+}
+
+function refreshSimulation(alphaFloor) {
+  if (!simulation) {
+    initSimulation();
+    return;
+  }
+  simulation.nodes(nodes);
+  simulation.force('link').links(edges);
+  if (typeof alphaFloor === 'number') {
+    simulation.alpha(Math.max(simulation.alpha(), alphaFloor)).restart();
+  }
+}
+
+function handleSseInit(data) {
+  if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.edges)) return;
+  if (nodes.length > 0) return;
+  buildGraphData({ nodes: data.nodes, edges: data.edges });
+  initSimulation();
+
+  if (data.stats || data.kinds) {
+    renderStats({
+      ...(data.stats || { nodes: data.nodes.length, edges: data.edges.length }),
+      kinds: data.kinds || (data.stats ? data.stats.kinds : undefined),
+    });
+  }
+
+  setEmptyStateVisible(nodes.length === 0);
+}
+
+function handleNodeAdded(data) {
+  if (!data || !data.id || nodeMap.has(data.id)) return;
+
+  const now = performance.now();
+  const parent = data.parent_id ? nodeMap.get(data.parent_id) : null;
+  const angle = Math.random() * Math.PI * 2;
+  const spread = parent ? (30 + Math.random() * 35) : (50 + Math.random() * 80);
+  const radius = Math.max(7, 7 + (data.edge_count || 0) * 1.5);
+  const node = {
+    id: data.id,
+    name: data.name,
+    kind: data.kind,
+    summary: data.summary,
+    parent_id: data.parent_id || null,
+    edge_count: data.edge_count || 0,
+    x: (parent ? parent.x : width / 2) + Math.cos(angle) * spread,
+    y: (parent ? parent.y : height / 2) + Math.sin(angle) * spread,
+    vx: 0,
+    vy: 0,
+    birthTime: now,
+    opacity: 1,
+    scale: 1,
+    pulseTime: now,
+    pulseLabel: null,
+    selected: false,
+    hovered: false,
+    dimmed: false,
+    highlighted: false,
+    radius,
+    color: KIND_COLORS[data.kind] || '#888',
+    _hasChildren: false,
+  };
+
+  nodes.push(node);
+  nodeMap.set(node.id, node);
+
+  if (parent) {
+    parent._hasChildren = true;
+    const hasParentEdge = edges.some((edge) => edge.isParentEdge
+      && edgeEndpointId(edge.source) === parent.id
+      && edgeEndpointId(edge.target) === node.id);
+    if (!hasParentEdge) {
+      edges.push({
+        source: parent.id,
+        target: node.id,
+        relation: 'child',
+        description: '',
+        isParentEdge: true,
+        birthTime: now,
+        drawProgress: 0,
+        pulseTime: null,
+        dimmed: false,
+      });
+    }
+  }
+
+  refreshSimulation(0.3);
+  spawnFloatingLabel('created', node, node.color);
+  setEmptyStateVisible(false);
+}
+
+function handleNodeUpdated(data) {
+  if (!data || !data.id) return;
+  const node = nodeMap.get(data.id);
+  if (!node) return;
+
+  node.name = data.name || node.name;
+  node.kind = data.kind || node.kind;
+  node.summary = data.summary || node.summary;
+  node.color = KIND_COLORS[node.kind] || '#888';
+
+  const now = performance.now();
+  node.pulseTime = now;
+  for (const edge of edges) {
+    const sourceId = edgeEndpointId(edge.source);
+    const targetId = edgeEndpointId(edge.target);
+    if (sourceId === node.id || targetId === node.id) {
+      edge.pulseTime = now + 150;
+    }
+  }
+
+  spawnFloatingLabel('updated', node, node.color);
+}
+
+function handleNodeRemoved(data) {
+  if (!data || !data.id || !nodeMap.has(data.id)) return;
+
+  const removedId = data.id;
+  const removedNode = nodeMap.get(removedId);
+
+  nodes = nodes.filter((node) => node.id !== removedId);
+  nodeMap.delete(removedId);
+  edges = edges.filter((edge) => {
+    const sourceId = edgeEndpointId(edge.source);
+    const targetId = edgeEndpointId(edge.target);
+    return sourceId !== removedId && targetId !== removedId;
+  });
+
+  if (removedNode && removedNode.parent_id) {
+    const parent = nodeMap.get(removedNode.parent_id);
+    if (parent) {
+      parent._hasChildren = nodes.some((node) => node.parent_id === parent.id);
+    }
+  }
+
+  refreshSimulation(0.3);
+  setEmptyStateVisible(nodes.length === 0);
+}
+
+function handleEdgeAdded(data) {
+  if (!data || !data.from || !data.to || !nodeMap.has(data.from) || !nodeMap.has(data.to)) return;
+
+  const exists = edges.some((edge) => !edge.isParentEdge
+    && edgeEndpointId(edge.source) === data.from
+    && edgeEndpointId(edge.target) === data.to
+    && edge.relation === data.relation);
+  if (exists) return;
+
+  const now = performance.now();
+  const edge = {
+    source: data.from,
+    target: data.to,
+    relation: data.relation,
+    description: data.description || '',
+    isParentEdge: false,
+    birthTime: now,
+    drawProgress: 0,
+    pulseTime: now,
+    dimmed: false,
+  };
+
+  edges.push(edge);
+  refreshSimulation(0.3);
+
+  const source = nodeMap.get(data.from);
+  const target = nodeMap.get(data.to);
+  if (source) source.pulseTime = now;
+  if (target) target.pulseTime = now;
+  if (source) spawnFloatingLabel('linked', source, source.color);
+}
+
+function handleEdgeRemoved(data) {
+  if (!data || !data.from || !data.to) return;
+
+  const before = edges.length;
+  edges = edges.filter((edge) => {
+    if (edge.isParentEdge) return true;
+    return !(
+      edgeEndpointId(edge.source) === data.from
+      && edgeEndpointId(edge.target) === data.to
+      && edge.relation === data.relation
+    );
+  });
+
+  if (edges.length !== before) {
+    refreshSimulation();
+  }
 }
 
 // ---- Stats footer ----
@@ -435,266 +732,583 @@ function renderStats(stats) {
   el.innerHTML = parts.join('');
 }
 
-// ---- Build elements (flat layout — no compound nodes) ----
+// ---- Data model + simulation ----
 
-function buildElements(data) {
-  const elements = [];
+function buildGraphData(data) {
+  const now = performance.now();
+  const parentIds = new Set(data.nodes.filter(n => n.parent_id).map(n => n.parent_id));
 
-  for (const n of data.nodes) {
-    elements.push({
-      group: 'nodes',
-      data: {
-        id: n.id,
-        name: n.name,
-        kind: n.kind,
-        summary: n.summary,
-        parent_id: n.parent_id,
-        edge_count: n.edge_count,
-        // Short display name: strip parent prefix for children
-        label: n.parent_id ? n.name : n.name,
-      },
+  nodes = data.nodes.map((n, i) => {
+    const radius = Math.max(7, 7 + (n.edge_count || 0) * 1.5);
+    return {
+      id: n.id,
+      name: n.name,
+      kind: n.kind,
+      summary: n.summary,
+      parent_id: n.parent_id,
+      edge_count: n.edge_count || 0,
+      x: width / 2 + (Math.random() - 0.5) * 120,
+      y: height / 2 + (Math.random() - 0.5) * 120,
+      vx: 0,
+      vy: 0,
+      birthTime: now + i * 50,
+      opacity: 1,
+      scale: 1,
+      pulseTime: null,
+      pulseLabel: null,
+      selected: false,
+      hovered: false,
+      dimmed: false,
+      highlighted: false,
+      radius,
+      color: KIND_COLORS[n.kind] || '#888',
+      _hasChildren: parentIds.has(n.id),
+    };
+  });
+
+  const explicitEdges = data.edges.map((e, i) => ({
+    source: e.from,
+    target: e.to,
+    relation: e.relation,
+    description: e.description || '',
+    isParentEdge: false,
+    birthTime: now + i * 25,
+    drawProgress: 1,
+    pulseTime: null,
+    dimmed: false,
+  }));
+
+  const parentEdges = [];
+  for (let i = 0; i < data.nodes.length; i += 1) {
+    const node = data.nodes[i];
+    if (!node.parent_id || !data.nodes.some(p => p.id === node.parent_id)) continue;
+    parentEdges.push({
+      source: node.parent_id,
+      target: node.id,
+      relation: 'child',
+      description: '',
+      isParentEdge: true,
+      birthTime: now + explicitEdges.length * 25 + i * 20,
+      drawProgress: 1,
+      pulseTime: null,
+      dimmed: false,
     });
   }
 
-  // Explicit edges from the graph
-  for (const e of data.edges) {
-    elements.push({
-      group: 'edges',
-      data: {
-        id: `e-${e.from}-${e.to}-${e.relation}`,
-        source: e.from,
-        target: e.to,
-        relation: e.relation,
-        description: e.description || '',
-        isParentEdge: false,
-      },
-    });
-  }
-
-  // Parent→child edges (dashed, to show hierarchy without compound nodes)
-  for (const n of data.nodes) {
-    if (n.parent_id && data.nodes.some(p => p.id === n.parent_id)) {
-      elements.push({
-        group: 'edges',
-        data: {
-          id: `parent-${n.parent_id}-${n.id}`,
-          source: n.parent_id,
-          target: n.id,
-          relation: 'child',
-          description: '',
-          isParentEdge: true,
-        },
-      });
-    }
-  }
-
-  return elements;
+  edges = explicitEdges.concat(parentEdges);
+  nodeMap = new Map(nodes.map(n => [n.id, n]));
 }
 
-// ---- Cytoscape styles ----
+function initSimulation() {
+  simulation = d3.forceSimulation([])
+    .force('charge', d3.forceManyBody().strength(d => d._hasChildren ? -300 : -180).distanceMin(15).distanceMax(500))
+    .force('center', d3.forceCenter(width / 2, height / 2).strength(0.04))
+    .force('collision', d3.forceCollide().radius(d => d.radius + 12).strength(0.6).iterations(2))
+    .force('link', d3.forceLink([]).id(d => d.id).distance(d => d.isParentEdge ? 90 : 200).strength(d => d.isParentEdge ? 0.4 : 0.15))
+    .alphaDecay(0.015)
+    .velocityDecay(0.35)
+    .on('tick', () => {});
 
-const STYLE = [
-  // Regular nodes (leaf / no children)
-  {
-    selector: 'node',
-    style: {
-      'label': 'data(label)',
-      'text-valign': 'bottom',
-      'text-halign': 'center',
-      'text-margin-y': 6,
-      'font-size': '10px',
-      'font-family': '"SF Mono", "Cascadia Code", "Fira Code", monospace',
-      'color': '#8892a8',
-      'text-outline-color': '#0f1117',
-      'text-outline-width': 1.5,
-      'background-color': function(ele) {
-        return KIND_COLORS[ele.data('kind')] || '#888';
-      },
-      'width': function(ele) {
-        const ec = ele.data('edge_count') || 0;
-        return Math.max(20, 20 + ec * 3);
-      },
-      'height': function(ele) {
-        const ec = ele.data('edge_count') || 0;
-        return Math.max(20, 20 + ec * 3);
-      },
-      'shape': 'ellipse',
-      'border-width': 0,
-      'overlay-padding': 6,
-      'cursor': 'pointer',
-    },
-  },
-  // Nodes that have children get a ring outline
-  {
-    selector: 'node[?_hasChildren]',
-    style: {
-      'border-width': 2,
-      'border-color': function(ele) {
-        const c = KIND_COLORS[ele.data('kind')] || '#888';
-        return c;
-      },
-      'border-opacity': 0.4,
-      'background-opacity': 0.8,
-    },
-  },
-  // Explicit relationship edges
-  {
-    selector: 'edge[!isParentEdge]',
-    style: {
-      'width': 1.5,
-      'line-color': '#3d4460',
-      'target-arrow-color': '#3d4460',
-      'target-arrow-shape': 'triangle',
-      'arrow-scale': 0.7,
-      'curve-style': 'bezier',
-      'label': 'data(relation)',
-      'font-size': '8px',
-      'color': '#555e75',
-      'text-rotation': 'autorotate',
-      'text-margin-y': -8,
-      'text-outline-color': '#0f1117',
-      'text-outline-width': 1,
-    },
-  },
-  // Parent→child edges (dashed, subtle)
-  {
-    selector: 'edge[?isParentEdge]',
-    style: {
-      'width': 1,
-      'line-color': '#2a2e42',
-      'line-style': 'dashed',
-      'line-dash-pattern': [4, 4],
-      'target-arrow-shape': 'none',
-      'curve-style': 'bezier',
-      'label': '',
-    },
-  },
-  // Selected
-  {
-    selector: 'node:selected',
-    style: {
-      'border-width': 2,
-      'border-color': '#ffffff',
-      'border-opacity': 1,
-    },
-  },
-  // Hover
-  {
-    selector: 'node:active',
-    style: {
-      'overlay-color': '#ffffff',
-      'overlay-opacity': 0.1,
-    },
-  },
-  // Dimmed (search)
-  {
-    selector: 'node.dimmed',
-    style: { 'opacity': 0.08 },
-  },
-  {
-    selector: 'edge.dimmed',
-    style: { 'opacity': 0.05 },
-  },
-  // Highlighted (search match)
-  {
-    selector: 'node.highlighted',
-    style: {
-      'border-width': 4,
-      'border-color': '#f59e0b',
-      'border-opacity': 1,
-      'underlay-color': '#f59e0b',
-      'underlay-opacity': 0.22,
-      'underlay-padding': 5,
-      'color': '#e2e8f0',
-    },
-  },
-];
-
-// ---- Grid background (moves with pan/zoom) ----
-
-const GRID_SMALL = 20;   // dot spacing in graph-space pixels
-const GRID_MAJOR = 100;  // major crosshair line spacing
-
-function updateGrid() {
-  if (!cy) return;
-  const zoom = cy.zoom();
-  const pan = cy.pan();
-
-  const smallSize = GRID_SMALL * zoom;
-  const majorSize = GRID_MAJOR * zoom;
-
-  const ox = pan.x % smallSize;
-  const oy = pan.y % smallSize;
-  const mx = pan.x % majorSize;
-  const my = pan.y % majorSize;
-
-  const el = cy.container();
-  el.style.backgroundSize = `${smallSize}px ${smallSize}px, ${majorSize}px ${majorSize}px, ${majorSize}px ${majorSize}px`;
-  el.style.backgroundPosition = `${ox}px ${oy}px, ${mx}px ${my}px, ${mx}px ${my}px`;
+  simulation.nodes(nodes);
+  simulation.force('link').links(edges);
+  simulation.alpha(1).restart();
 }
 
-// ---- Init graph ----
+function setupCanvas() {
+  canvas = document.getElementById('graph');
+  const container = canvas.parentElement;
+  dpr = window.devicePixelRatio || 1;
+  const rect = container.getBoundingClientRect();
+  width = rect.width;
+  height = rect.height;
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  ctx = canvas.getContext('2d');
+  return ctx;
+}
 
-function initCytoscape(elements, data) {
-  // Mark nodes that have children
-  const childParentIds = new Set(data.nodes.filter(n => n.parent_id).map(n => n.parent_id));
-  for (const el of elements) {
-    if (el.group === 'nodes' && childParentIds.has(el.data.id)) {
-      el.data._hasChildren = true;
+function worldToScreen(x, y) {
+  return {
+    x: x * zoom + panX,
+    y: y * zoom + panY,
+  };
+}
+
+function screenToWorld(x, y) {
+  return {
+    x: (x - panX) / zoom,
+    y: (y - panY) / zoom,
+  };
+}
+
+function easeOutBack(t) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function computeEntrance(node, now) {
+  const DURATION = 450;
+  const age = now - node.birthTime;
+  if (age >= DURATION) return { opacity: 1, scale: 1 };
+  if (age <= 0) return { opacity: 0, scale: 0 };
+  const t = age / DURATION;
+  return { opacity: Math.min(1, t * 2), scale: easeOutBack(t) };
+}
+
+function computePulse(pulseTime, now) {
+  if (!pulseTime) return 0;
+  const elapsed = now - pulseTime;
+  if (elapsed < 0) return 0;
+  const RAMP = 200;
+  const DECAY = 1200;
+  if (elapsed < RAMP) return elapsed / RAMP;
+  if (elapsed < RAMP + DECAY) return 1 - (elapsed - RAMP) / DECAY;
+  return 0;
+}
+
+function truncateLabel(text, max) {
+  if (!text) return '';
+  return text.length > max ? text.slice(0, max - 1) + '…' : text;
+}
+
+function edgeNodes(edge) {
+  const source = typeof edge.source === 'string' ? nodeMap.get(edge.source) : edge.source;
+  const target = typeof edge.target === 'string' ? nodeMap.get(edge.target) : edge.target;
+  return { source, target };
+}
+
+function drawGrid(now) {
+  ctx.fillStyle = '#0a0a0f';
+  ctx.fillRect(0, 0, width, height);
+
+  const minor = 20 * zoom;
+  const major = 100 * zoom;
+
+  if (minor >= 6) {
+    const ox = ((panX % minor) + minor) % minor;
+    const oy = ((panY % minor) + minor) % minor;
+    const dotSize = Math.max(0.5, Math.min(3, zoom));
+    ctx.fillStyle = '#1e2230';
+    for (let x = ox; x <= width; x += minor) {
+      for (let y = oy; y <= height; y += minor) {
+        if (dotSize > 1.5) {
+          ctx.beginPath();
+          ctx.arc(x, y, dotSize / 2, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(Math.floor(x) - dotSize / 2, Math.floor(y) - dotSize / 2, dotSize, dotSize);
+        }
+      }
     }
   }
 
-  cy = cytoscape({
-    container: document.getElementById('graph'),
-    elements: elements,
-    style: STYLE,
-    layout: {
-      name: 'cose',
-      animate: true,
-      animationDuration: 600,
-      nodeRepulsion: function() { return 60000; },
-      idealEdgeLength: function(edge) {
-        // Parent-child edges shorter to keep them close
-        return edge.data('isParentEdge') ? 80 : 180;
-      },
-      edgeElasticity: function(edge) {
-        return edge.data('isParentEdge') ? 200 : 100;
-      },
-      gravity: 0.08,
-      padding: 60,
-      nodeDimensionsIncludeLabels: true,
-      randomize: false,
-      numIter: 2000,
-    },
-    minZoom: 0.15,
-    maxZoom: 5,
-    wheelSensitivity: 0.3,
+  const mx = ((panX % major) + major) % major;
+  const my = ((panY % major) + major) % major;
+  ctx.strokeStyle = '#181c28';
+  ctx.lineWidth = Math.max(0.5, Math.min(2, zoom));
+  ctx.beginPath();
+  for (let x = mx; x <= width; x += major) {
+    ctx.moveTo(Math.floor(x) + 0.5, 0);
+    ctx.lineTo(Math.floor(x) + 0.5, height);
+  }
+  for (let y = my; y <= height; y += major) {
+    ctx.moveTo(0, Math.floor(y) + 0.5);
+    ctx.lineTo(width, Math.floor(y) + 0.5);
+  }
+  ctx.stroke();
+}
+
+function drawEdges(now) {
+  for (const edge of edges) {
+    const pair = edgeNodes(edge);
+    const source = pair.source;
+    const target = pair.target;
+    if (!source || !target) continue;
+
+    const sx = source.x;
+    const sy = source.y;
+    const tx = target.x;
+    const ty = target.y;
+
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const curve = edge.isParentEdge ? 10 : 18;
+    const cx = (sx + tx) * 0.5 + nx * curve;
+    const cy = (sy + ty) * 0.5 + ny * curve;
+
+    const dimAlpha = edge.dimmed ? 0.08 : 0.65;
+    const age = now - edge.birthTime;
+    const progress = Math.max(0, Math.min(1, age / 350));
+    const pulse = computePulse(edge.pulseTime, now);
+    edge.drawProgress = progress;
+    const alpha = Math.min(1, dimAlpha * (0.25 + progress * 0.75) + pulse * 0.35);
+    const lineColor = edge.isParentEdge
+      ? '#2a2e42'
+      : (pulse > 0 ? source.color : '#3d4460');
+    const lineWidth = edge.isParentEdge ? 1 : (1.5 + pulse);
+
+    const p01x = sx + (cx - sx) * progress;
+    const p01y = sy + (cy - sy) * progress;
+    const p12x = cx + (tx - cx) * progress;
+    const p12y = cy + (ty - cy) * progress;
+    const ex = p01x + (p12x - p01x) * progress;
+    const ey = p01y + (p12y - p01y) * progress;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = lineWidth;
+    ctx.setLineDash(edge.isParentEdge ? [4, 4] : []);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    if (progress < 1) {
+      ctx.quadraticCurveTo(p01x, p01y, ex, ey);
+    } else {
+      ctx.quadraticCurveTo(cx, cy, tx, ty);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    if (!edge.isParentEdge && progress > 0.92) {
+      const t = Math.max(0.15, Math.min(0.95, progress * 0.95));
+      const qx = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx;
+      const qy = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty;
+      const ddx = 2 * (1 - t) * (cx - sx) + 2 * t * (tx - cx);
+      const ddy = 2 * (1 - t) * (cy - sy) + 2 * t * (ty - cy);
+      const dlen = Math.hypot(ddx, ddy) || 1;
+      const ux = ddx / dlen;
+      const uy = ddy / dlen;
+      const size = 5;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = lineColor;
+      ctx.beginPath();
+      ctx.moveTo(qx + ux * size, qy + uy * size);
+      ctx.lineTo(qx - ux * size - uy * size * 0.7, qy - uy * size + ux * size * 0.7);
+      ctx.lineTo(qx - ux * size + uy * size * 0.7, qy - uy * size - ux * size * 0.7);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (!edge.isParentEdge && edge.relation && progress > 0.65) {
+      const screenDistance = len * zoom;
+      if (screenDistance <= 120) continue;
+      const t = 0.5;
+      const qx = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * cx + t * t * tx;
+      const qy = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * cy + t * t * ty;
+      const labelY = qy - 8;
+      ctx.save();
+      ctx.globalAlpha = edge.dimmed ? 0.2 : (0.7 + pulse * 0.2);
+      ctx.font = '8px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const textWidth = ctx.measureText(edge.relation).width;
+      const padX = 5;
+      const padY = 2;
+      const rectW = textWidth + padX * 2;
+      const rectH = 10 + padY * 2;
+      ctx.fillStyle = 'rgba(10,10,15,0.8)';
+      ctx.fillRect(qx - rectW / 2, labelY - rectH / 2, rectW, rectH);
+      ctx.fillStyle = pulse > 0 ? source.color : '#555e75';
+      ctx.fillText(edge.relation, qx, labelY);
+      ctx.restore();
+    }
+  }
+}
+
+function drawNodeGlows(now) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const node of nodes) {
+    const entrance = computeEntrance(node, now);
+    node.opacity = entrance.opacity;
+    node.scale = entrance.scale;
+
+    const pulse = computePulse(node.pulseTime, now);
+    const alphaBase = node.dimmed ? 0.06 : (node.highlighted ? 0.45 : 0.2);
+    const alpha = Math.min(1, alphaBase + pulse * 0.35);
+    const r = node.radius * (node.highlighted ? 2.9 : 2.3) * node.scale + pulse * 15;
+    const g = ctx.createRadialGradient(node.x, node.y, 0, node.x, node.y, r);
+    g.addColorStop(0, hexToRgba(node.color, alpha));
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (pulse > 0) {
+      ctx.strokeStyle = hexToRgba(node.color, (node.dimmed ? 0.2 : 0.55) * pulse);
+      ctx.lineWidth = 1.3 + pulse * 1.2;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, node.radius * (1.3 + pulse * 0.8), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawNodes(now) {
+  for (const node of nodes) {
+    const entrance = computeEntrance(node, now);
+    const radius = node.radius * entrance.scale;
+    if (radius <= 0) continue;
+
+    const baseAlpha = node.dimmed ? 0.12 : 1;
+    ctx.save();
+    ctx.globalAlpha = baseAlpha * entrance.opacity;
+    ctx.fillStyle = node.color;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (node._hasChildren) {
+      ctx.strokeStyle = hexToRgba(node.color, node.dimmed ? 0.3 : 0.5);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius + 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    if (node.selected || node.highlighted) {
+      ctx.strokeStyle = node.selected ? '#ffffff' : '#f59e0b';
+      ctx.lineWidth = node.selected ? 2 : 3;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius + 2, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (node.hovered) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, radius + 1.5, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
+function drawLabels() {
+  ctx.save();
+  const labelFontSize = nodes.length > 60 ? 8 : 9;
+  ctx.font = `${labelFontSize}px "SF Mono", "Cascadia Code", "Fira Code", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 2;
+  for (const node of nodes) {
+    const alpha = node.dimmed ? 0.12 : 0.9;
+    if (node.dimmed || alpha <= 0.15) continue;
+    const label = truncateLabel(node.name, 20);
+    const labelX = node.x;
+    const labelY = node.y + node.radius + 8;
+    ctx.strokeStyle = 'rgba(10,10,15,0.9)';
+    ctx.strokeText(label, labelX, labelY);
+    ctx.fillStyle = `rgba(136,146,168,${alpha})`;
+    ctx.fillText(label, labelX, labelY);
+  }
+  ctx.restore();
+}
+
+function draw(now) {
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawGrid(now);
+
+  ctx.save();
+  ctx.translate(panX, panY);
+  ctx.scale(zoom, zoom);
+  drawEdges(now);
+  drawNodeGlows(now);
+  drawNodes(now);
+  drawLabels();
+  ctx.restore();
+}
+
+function renderLoop(now) {
+  if (cameraAnimation) {
+    const elapsed = now - cameraAnimation.start;
+    const t = Math.max(0, Math.min(1, elapsed / cameraAnimation.duration));
+    const eased = easeInOutCubic(t);
+    zoom = cameraAnimation.fromZoom + (cameraAnimation.toZoom - cameraAnimation.fromZoom) * eased;
+    panX = cameraAnimation.fromPanX + (cameraAnimation.toPanX - cameraAnimation.fromPanX) * eased;
+    panY = cameraAnimation.fromPanY + (cameraAnimation.toPanY - cameraAnimation.fromPanY) * eased;
+    if (t >= 1) cameraAnimation = null;
+  }
+
+  draw(now);
+  renderHandle = requestAnimationFrame(renderLoop);
+}
+
+function animateTo(targetX, targetY, targetZoom, duration) {
+  const clampedZoom = Math.max(0.15, Math.min(5, targetZoom));
+  cameraAnimation = {
+    start: performance.now(),
+    duration,
+    fromZoom: zoom,
+    fromPanX: panX,
+    fromPanY: panY,
+    toZoom: clampedZoom,
+    toPanX: width / 2 - targetX * clampedZoom,
+    toPanY: height / 2 - targetY * clampedZoom,
+  };
+}
+
+function hitTestNode(screenX, screenY, padding) {
+  if (!nodes.length) return null;
+  const world = screenToWorld(screenX, screenY);
+  const worldPad = (padding || 0) / zoom;
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const n = nodes[i];
+    const r = n.radius + worldPad;
+    const dx = world.x - n.x;
+    const dy = world.y - n.y;
+    if ((dx * dx + dy * dy) <= r * r) return n;
+  }
+  return null;
+}
+
+function setSelectedNode(node) {
+  for (const n of nodes) n.selected = false;
+  if (node) node.selected = true;
+}
+
+function spawnFloatingLabel(text, node, color) {
+  const layer = document.getElementById('floating-labels');
+  if (!layer || !node) return;
+  const pt = worldToScreen(node.x, node.y - node.radius - 8);
+  const el = document.createElement('div');
+  el.className = 'floating-label';
+  el.textContent = text;
+  el.style.left = `${pt.x}px`;
+  el.style.top = `${pt.y}px`;
+  el.style.color = color || '#e2e8f0';
+  layer.appendChild(el);
+  setTimeout(() => {
+    if (el.parentNode) el.parentNode.removeChild(el);
+  }, 1900);
+}
+
+function setupCanvasInteraction() {
+  const getPoint = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+
+  canvas.addEventListener('mousedown', (event) => {
+    if (event.button !== 0) return;
+    const point = getPoint(event);
+    pointerDown = true;
+    movedSinceDown = false;
+    lastPointer = point;
+
+    const hit = hitTestNode(point.x, point.y, 8);
+    if (hit) {
+      dragNode = hit;
+      const world = screenToWorld(point.x, point.y);
+      hit.fx = world.x;
+      hit.fy = world.y;
+      simulation.alphaTarget(0.25).restart();
+      isPanning = false;
+      return;
+    }
+
+    dragNode = null;
+    isPanning = true;
   });
 
-  // Update grid on every viewport change (pan, zoom, resize)
-  cy.on('viewport', updateGrid);
-  cy.on('layoutstop', updateGrid);
-  updateGrid();
+  window.addEventListener('mousemove', (event) => {
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) {
+      for (const n of nodes) n.hovered = false;
+      canvas.style.cursor = 'default';
+      return;
+    }
 
-  // Click node → panel
-  cy.on('tap', 'node', async function(evt) {
-    const node = evt.target;
-    const id = node.id();
-    cy.$(':selected').unselect();
-    node.select();
-    try {
-      const detail = await fetchNode(id);
-      if (!detail.error) showPanel(detail);
-      else console.error('fetchNode error:', detail.error);
-    } catch (err) {
-      console.error('Failed to fetch node:', id, err);
+    const point = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const hit = hitTestNode(point.x, point.y, 8);
+
+    if (!pointerDown) {
+      hoverNode = hit;
+      for (const n of nodes) n.hovered = (hit && n.id === hit.id);
+      canvas.style.cursor = hit ? 'pointer' : 'default';
+      return;
+    }
+
+    const dx = point.x - lastPointer.x;
+    const dy = point.y - lastPointer.y;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) movedSinceDown = true;
+    lastPointer = point;
+
+    if (dragNode) {
+      const world = screenToWorld(point.x, point.y);
+      dragNode.fx = world.x;
+      dragNode.fy = world.y;
+      return;
+    }
+
+    if (isPanning) {
+      panX += dx;
+      panY += dy;
     }
   });
 
-  // Click background → close panel
-  cy.on('tap', function(evt) {
-    if (evt.target === cy) closePanel();
+  window.addEventListener('mouseup', async (event) => {
+    if (!pointerDown) return;
+    pointerDown = false;
+
+    if (dragNode) {
+      const clickedNode = !movedSinceDown ? dragNode : null;
+      dragNode.fx = null;
+      dragNode.fy = null;
+      simulation.alphaTarget(0);
+      dragNode = null;
+
+      if (clickedNode) {
+        setSelectedNode(clickedNode);
+        try {
+          const detail = await fetchNode(clickedNode.id);
+          if (!detail.error) {
+            showPanel(detail);
+            spawnFloatingLabel(clickedNode.kind, clickedNode, clickedNode.color);
+          }
+        } catch (err) {
+          console.error('Failed to fetch node:', clickedNode.id, err);
+        }
+      }
+      return;
+    }
+
+    if (isPanning && !movedSinceDown) {
+      setSelectedNode(null);
+      closePanel();
+    }
+    isPanning = false;
   });
+
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const point = getPoint(event);
+    const world = screenToWorld(point.x, point.y);
+
+    const factor = Math.exp(-event.deltaY * 0.0012);
+    const nextZoom = Math.max(0.15, Math.min(5, zoom * factor));
+
+    zoom = nextZoom;
+    panX = point.x - world.x * zoom;
+    panY = point.y - world.y * zoom;
+  }, { passive: false });
 }
 
 // ---- Detail panel ----
@@ -784,23 +1398,21 @@ function showPanel(d) {
 
 function closePanel() {
   document.getElementById('panel').classList.remove('open');
-  if (cy) cy.$(':selected').unselect();
+  for (const n of nodes) n.selected = false;
 }
 
 function navigateTo(id) {
-  if (!cy) return;
-  const node = cy.getElementById(id);
-  if (node.length === 0) return;
-
-  cy.$(':selected').unselect();
-  node.select();
-
-  cy.animate({
-    center: { eles: node },
-    zoom: 2.5,
-  }, { duration: 300 });
-
-  fetchNode(id).then(d => { if (!d.error) showPanel(d); });
+  const node = nodes.find(n => n.id === id);
+  if (!node) return;
+  for (const n of nodes) n.selected = false;
+  node.selected = true;
+  animateTo(node.x, node.y, 2.5, 300);
+  fetchNode(id).then(d => {
+    if (!d.error) {
+      showPanel(d);
+      spawnFloatingLabel(node.kind, node, node.color);
+    }
+  });
 }
 
 // ---- Search ----
@@ -811,26 +1423,34 @@ function setSearchLoading(loading) {
 }
 
 function clearSearchHighlight() {
-  if (!cy) return;
-  cy.elements().removeClass('dimmed highlighted');
+  for (const n of nodes) {
+    n.dimmed = false;
+    n.highlighted = false;
+  }
+  for (const e of edges) {
+    e.dimmed = false;
+  }
 }
 
 function highlightSearchMatches(matches) {
-  if (!cy) return;
   if (!matches.length) {
     clearSearchHighlight();
     return;
   }
 
   const ids = new Set(matches.map(m => m.id));
-  cy.batch(() => {
-    cy.elements().addClass('dimmed').removeClass('highlighted');
-    cy.nodes().forEach(node => {
-      if (!ids.has(node.id())) return;
-      node.removeClass('dimmed').addClass('highlighted');
-      node.connectedEdges().removeClass('dimmed');
-    });
-  });
+  for (const n of nodes) {
+    n.highlighted = ids.has(n.id);
+    n.dimmed = !n.highlighted;
+  }
+
+  for (const e of edges) {
+    const pair = edgeNodes(e);
+    const sourceId = pair.source ? pair.source.id : null;
+    const targetId = pair.target ? pair.target.id : null;
+    const connected = (sourceId && ids.has(sourceId)) || (targetId && ids.has(targetId));
+    e.dimmed = !connected;
+  }
 }
 
 function closeSearchResults() {
@@ -896,25 +1516,24 @@ function renderSearchResults(query, matches, mode) {
 }
 
 function localFallbackMatches(query, limit) {
-  if (!cy) return [];
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
 
   const matches = [];
-  cy.nodes().forEach(node => {
+  nodes.forEach(node => {
     const haystack = [
-      node.data('name') || '',
-      node.data('summary') || '',
-      node.data('kind') || '',
+      node.name || '',
+      node.summary || '',
+      node.kind || '',
     ].join(' ').toLowerCase();
 
     if (!terms.every(term => haystack.includes(term))) return;
 
     matches.push({
-      id: node.id(),
-      name: node.data('name') || node.id(),
-      kind: node.data('kind') || 'feature',
-      summary: node.data('summary') || '',
+      id: node.id,
+      name: node.name || node.id,
+      kind: node.kind || 'feature',
+      summary: node.summary || '',
     });
   });
 
@@ -1083,20 +1702,45 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+function hexToRgba(hex, alpha) {
+  const v = (hex || '').replace('#', '');
+  if (v.length !== 6) return `rgba(255,255,255,${alpha})`;
+  const r = Number.parseInt(v.slice(0, 2), 16);
+  const g = Number.parseInt(v.slice(2, 4), 16);
+  const b = Number.parseInt(v.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
 // ---- Init ----
 
 async function init() {
+  setupCanvas();
+  setupCanvasInteraction();
+
+  window.addEventListener('resize', () => {
+    setupCanvas();
+    if (simulation) {
+      simulation.force('center', d3.forceCenter(width / 2, height / 2).strength(0.04));
+      simulation.alpha(Math.max(simulation.alpha(), 0.3)).restart();
+    }
+  });
+
   const [graphData, stats] = await Promise.all([fetchGraph(), fetchStats()]);
   renderStats(stats);
 
-  if (graphData.nodes.length === 0) {
-    document.getElementById('empty-state').classList.add('visible');
-    return;
-  }
+  buildGraphData(graphData);
+  initSimulation();
+  setEmptyStateVisible(graphData.nodes.length === 0);
 
-  const elements = buildElements(graphData);
-  initCytoscape(elements, graphData);
+  panX = 0;
+  panY = 0;
+  zoom = 1;
+
+  if (renderHandle) cancelAnimationFrame(renderHandle);
+  renderHandle = requestAnimationFrame(renderLoop);
+
   setupSearch();
+  connectSSE();
 }
 
 init();

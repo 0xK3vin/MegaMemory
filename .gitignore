@@ -8,3 +8,4 @@ dist/
 .env*
 .osgrep
 coverage/
+debug/
