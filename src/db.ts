@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import type { NodeRow, EdgeRow } from "./types.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export class KnowledgeDB {
   private db: Database.Database;
@@ -114,6 +114,27 @@ export class KnowledgeDB {
           CREATE INDEX IF NOT EXISTS idx_edges_needs_merge ON edges(needs_merge);
         `);
       }
+    }
+
+    if (version < 3) {
+      // Add timeline table for version 3
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS timeline (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp TEXT DEFAULT (datetime('now')),
+          tool TEXT NOT NULL,
+          params TEXT NOT NULL,
+          result_summary TEXT NOT NULL,
+          is_write INTEGER NOT NULL,
+          is_error INTEGER NOT NULL,
+          affected_ids TEXT NOT NULL
+        );
+        
+        CREATE INDEX IF NOT EXISTS idx_timeline_timestamp ON timeline(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_timeline_tool ON timeline(tool);
+        CREATE INDEX IF NOT EXISTS idx_timeline_is_write ON timeline(is_write);
+        CREATE INDEX IF NOT EXISTS idx_timeline_is_error ON timeline(is_error);
+      `);
     }
 
     if (version < SCHEMA_VERSION) {
@@ -582,6 +603,180 @@ export class KnowledgeDB {
       merge_timestamp: edge.merge_timestamp ?? null,
     });
     return Number(result.lastInsertRowid);
+  }
+
+  // ---- Timeline Methods ----
+
+  insertTimelineEntry(entry: {
+    tool: string;
+    params: string;
+    result_summary: string;
+    is_write: boolean;
+    is_error: boolean;
+    affected_ids: string[];
+  }): number {
+    const stmt = this.db.prepare(`
+      INSERT INTO timeline (tool, params, result_summary, is_write, is_error, affected_ids)
+      VALUES (@tool, @params, @result_summary, @is_write, @is_error, @affected_ids)
+    `);
+    const result = stmt.run({
+      tool: entry.tool,
+      params: entry.params,
+      result_summary: entry.result_summary,
+      is_write: entry.is_write ? 1 : 0,
+      is_error: entry.is_error ? 1 : 0,
+      affected_ids: JSON.stringify(entry.affected_ids),
+    });
+    return Number(result.lastInsertRowid);
+  }
+
+  getTimelineBounds(): { first: string | null; last: string | null; count: number } {
+    const stmt = this.db.prepare(`
+      SELECT 
+        MIN(timestamp) as first,
+        MAX(timestamp) as last,
+        COUNT(*) as count
+      FROM timeline
+    `);
+    const result = stmt.get() as { first: string | null; last: string | null; count: number };
+    return {
+      first: result.first,
+      last: result.last,
+      count: result.count,
+    };
+  }
+
+  getTimelineEntries(options: {
+    limit?: number;
+    tool?: string;
+    writesOnly?: boolean;
+    since?: string;
+    until?: string;
+  } = {}): Array<{
+    seq: number;
+    timestamp: string;
+    tool: string;
+    params: string;
+    result_summary: string;
+    is_write: number;
+    is_error: number;
+    affected_ids: string;
+  }> {
+    let query = `SELECT * FROM timeline WHERE 1=1`;
+    const params: Record<string, unknown> = {};
+
+    if (options.tool) {
+      query += ` AND tool = @tool`;
+      params.tool = options.tool;
+    }
+
+    if (options.writesOnly) {
+      query += ` AND is_write = 1`;
+    }
+
+    if (options.since) {
+      query += ` AND timestamp >= @since`;
+      params.since = options.since;
+    }
+
+    if (options.until) {
+      query += ` AND timestamp <= @until`;
+      params.until = options.until;
+    }
+
+    query += ` ORDER BY seq`;
+
+    if (options.limit) {
+      query += ` LIMIT @limit`;
+      params.limit = options.limit;
+    }
+
+    const stmt = this.db.prepare(query);
+    return stmt.all(params) as Array<{
+      seq: number;
+      timestamp: string;
+      tool: string;
+      params: string;
+      result_summary: string;
+      is_write: number;
+      is_error: number;
+      affected_ids: string;
+    }>;
+  }
+
+  getTimelineTicks(n: number): Array<{
+    seq: number;
+    timestamp: string;
+    tool: string;
+    params: string;
+    result_summary: string;
+    is_write: number;
+    is_error: number;
+    affected_ids: string;
+  }> {
+    const totalCount = this.getTimelineBounds().count;
+    
+    if (totalCount === 0 || n >= totalCount) {
+      return this.getTimelineEntries();
+    }
+
+    // Sample entries evenly distributed across the timeline
+    // We want to select n entries from the range [1, totalCount]
+    const step = totalCount / (n - 1); // -1 to ensure we include the last entry
+    const selectedSeqs: number[] = [];
+    
+    for (let i = 0; i < n; i++) {
+      if (i === 0) {
+        selectedSeqs.push(1); // Always start with the first entry
+      } else if (i === n - 1 && n > 1) {
+        selectedSeqs.push(totalCount); // Always end with the last entry
+      } else {
+        selectedSeqs.push(Math.round(1 + i * step));
+      }
+    }
+
+    // Remove duplicates and sort
+    const uniqueSeqs = [...new Set(selectedSeqs)].sort((a, b) => a - b);
+    
+    const placeholders = uniqueSeqs.map(() => '?').join(',');
+    const stmt = this.db.prepare(`
+      SELECT * FROM timeline 
+      WHERE seq IN (${placeholders})
+      ORDER BY seq
+    `);
+    return stmt.all(...uniqueSeqs) as Array<{
+      seq: number;
+      timestamp: string;
+      tool: string;
+      params: string;
+      result_summary: string;
+      is_write: number;
+      is_error: number;
+      affected_ids: string;
+    }>;
+  }
+
+  getNodesAtTime(timestamp: string): NodeRow[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM nodes
+      WHERE created_at <= @timestamp
+        AND (removed_at IS NULL OR removed_at > @timestamp)
+    `);
+    return stmt.all({ timestamp }) as NodeRow[];
+  }
+
+  getEdgesAtTime(timestamp: string): EdgeRow[] {
+    const stmt = this.db.prepare(`
+      SELECT e.* FROM edges e
+      INNER JOIN nodes nf ON e.from_id = nf.id
+      INNER JOIN nodes nt ON e.to_id = nt.id
+      WHERE e.created_at <= @timestamp
+        AND nf.created_at <= @timestamp
+        AND nt.created_at <= @timestamp
+        AND (nf.removed_at IS NULL OR nf.removed_at > @timestamp)
+        AND (nt.removed_at IS NULL OR nt.removed_at > @timestamp)
+    `);
+    return stmt.all({ timestamp }) as EdgeRow[];
   }
 
   close(): void {
