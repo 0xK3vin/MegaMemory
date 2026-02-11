@@ -85,7 +85,7 @@ switch (cmd) {
 
   case "stats": {
     const { runStats } = await import("./stats.js");
-    runStats(process.argv.slice(3));
+    await runStats(process.argv.slice(3));
     process.exit(0);
     break;
   }

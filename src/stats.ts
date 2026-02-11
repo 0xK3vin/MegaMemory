@@ -52,87 +52,119 @@ function sortedKinds(kinds: Record<string, number>): Array<[string, number]> {
   return [...preferred, ...extra];
 }
 
-function estimateTokens(jsonText: string): number {
-  // Rough estimate: ~4 characters per token
-  return Math.ceil(jsonText.length / 4);
-}
-
-function getDatabaseFileSize(dbPath: string): number {
-  try {
-    return fs.statSync(dbPath).size;
-  } catch {
-    return 0;
-  }
-}
-
-export function runStats(args: string[]): void {
-  let dbPath = getFlag(args, "--db");
-  if (!dbPath) {
-    dbPath = getDefaultDbPath();
-  }
+export async function runStats(args: string[]): Promise<void> {
+  const dbPath = path.resolve(getFlag(args, "--db") ?? getDefaultDbPath());
 
   if (!fs.existsSync(dbPath)) {
-    errorBold(`Database not found at ${pc.dim(dbPath)}`);
-    console.log(pc.dim("  Run megamemory in a project that has been used with the MCP server,"));
-    console.log(pc.dim("  or use --db to specify the database path."));
-    return;
+    errorBold(`Database not found: ${dbPath}`);
+    process.exit(1);
+  }
+
+  let dbStat: fs.Stats;
+  try {
+    dbStat = fs.statSync(dbPath);
+  } catch (err) {
+    errorBold(`Failed to stat database file: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
   }
 
   const db = new KnowledgeDB(dbPath);
-  const dbStats = db.getStats();
-  const kindStats = db.getKindsBreakdown();
-  const fileSize = getDatabaseFileSize(dbPath);
+  try {
+    const stats = db.getStats();
+    const rootCount = db.getRootNodes().length;
+    const timelineCount = db.getTimelineBounds().count;
+    const kinds = db.getKindsBreakdown();
+    const nodes = db.getAllActiveNodes();
 
-  console.log();
-  console.log(`  ${pc.bold(pc.cyan("megamemory"))} ${pc.dim("database stats")}`);
-  console.log();
+    const childCount = nodes.filter((node) => node.parent_id !== null).length;
 
-  // Database file
-  printRow("File size", formatBytes(fileSize), dbPath);
-  printRow("Nodes", formatNumber(dbStats.nodes));
-  printRow("Edges", formatNumber(dbStats.edges));
-  printRow("Removed", formatNumber(dbStats.removed));
-  console.log();
+    // Per-node size analysis
+    let totalChars = 0;
+    let totalBytes = 0;
+    let totalTokens = 0;
+    let largest: { name: string; tokens: number } | null = null;
+    let smallest: { name: string; tokens: number } | null = null;
 
-  // Kind breakdown
-  if (Object.keys(kindStats).length > 0) {
-    console.log(`    ${pc.cyan("Kind breakdown:")}`);
-    for (const [kind, count] of sortedKinds(kindStats)) {
-      const percentage = ((count / dbStats.nodes) * 100).toFixed(1);
-      printRow(`  ${kind}`, formatNumber(count), `${percentage}%`);
+    for (const node of nodes) {
+      const payload = JSON.stringify({
+        name: node.name,
+        summary: node.summary,
+        why: node.why ?? "",
+        file_refs: node.file_refs ?? "",
+      });
+      const chars = payload.length;
+      const bytes = Buffer.byteLength(payload, "utf8");
+      const tokens = Math.ceil(chars / 4);
+
+      totalChars += chars;
+      totalBytes += bytes;
+      totalTokens += tokens;
+
+      if (!largest || tokens > largest.tokens) {
+        largest = { name: node.name, tokens };
+      }
+      if (!smallest || tokens < smallest.tokens) {
+        smallest = { name: node.name, tokens };
+      }
+    }
+
+    const avgTokens = nodes.length > 0 ? Math.ceil(totalTokens / nodes.length) : 0;
+
+    // list_roots payload analysis (matches what MCP server actually sends)
+    const listRootsResult = listRoots(db);
+    const listRootsPayload = JSON.stringify({ ...listRootsResult, stats: db.getStats() }, null, 2);
+    const listRootsChars = listRootsPayload.length;
+    const listRootsTokens = Math.ceil(listRootsChars / 4);
+    const listRootsNodeCount = listRootsResult.roots.reduce(
+      (sum, r) => sum + 1 + r.children.length,
+      0
+    );
+
+    // Print output
+    console.log(pc.bold(pc.cyan("megamemory stats")));
+    console.log();
+
+    console.log(`  ${pc.bold("Database")}`);
+    printRow("Path", dbPath);
+    printRow("File size", formatBytes(dbStat.size), `(${formatNumber(dbStat.size)} bytes)`);
+    console.log();
+
+    console.log(`  ${pc.bold("Graph")}`);
+    printRow("Nodes", formatNumber(stats.nodes), `(${formatNumber(rootCount)} root, ${formatNumber(childCount)} children)`);
+    printRow("Edges", formatNumber(stats.edges));
+    printRow("Removed", formatNumber(stats.removed));
+    printRow("Timeline", `${formatNumber(timelineCount)} entries`);
+    console.log();
+
+    console.log(`  ${pc.bold("list_roots")}`);
+    printRow("Nodes", formatNumber(listRootsNodeCount), `(${listRootsResult.roots.length} roots + ${listRootsNodeCount - listRootsResult.roots.length} children)`);
+    printRow("Response size", `~${formatNumber(listRootsTokens)} tokens`, `(${formatNumber(listRootsChars)} chars)`);
+    console.log();
+
+    console.log(`  ${pc.bold("Kinds")}`);
+    for (const [kind, count] of sortedKinds(kinds)) {
+      printRow(kind, formatNumber(count));
+    }
+    if (Object.keys(kinds).length === 0) {
+      printRow("-", "0");
     }
     console.log();
-  }
 
-  // list_roots token cost analysis
-  try {
-    const rootsOutput = listRoots(db);
-    const rootsJson = JSON.stringify(rootsOutput, null, 2);
-    const estimatedTokens = estimateTokens(rootsJson);
-
-    console.log(`    ${pc.cyan("list_roots payload:")}`);
-    printRow("JSON size", formatBytes(rootsJson.length));
-    printRow("Est. tokens", formatNumber(estimatedTokens));
-
-    // Calculate what the old format would have cost
-    const oldFormatSize = rootsOutput.roots.reduce((total, root) => {
-      // Estimate: each child as full object vs just name
-      const childrenAsObjects = root.children.length * 200; // rough estimate per object
-      const childrenAsStrings = root.children.reduce((sum, name) => sum + name.length + 2, 0); // +2 for quotes
-      return total + childrenAsObjects - childrenAsStrings;
-    }, rootsJson.length);
-    
-    const oldTokens = estimateTokens(JSON.stringify({ length: oldFormatSize }));
-    const savings = Math.round(((oldTokens - estimatedTokens) / oldTokens) * 100);
-
-    if (savings > 0) {
-      printRow("Token savings", `~${savings}%`, "vs full children objects");
+    console.log(`  ${pc.bold("Size")}`);
+    printRow("Total tokens", `~${formatNumber(totalTokens)}`);
+    printRow("Total chars", formatNumber(totalChars), `(${formatNumber(totalBytes)} bytes)`);
+    printRow("Avg node tokens", `~${formatNumber(avgTokens)}`);
+    if (largest) {
+      printRow("Largest", `${largest.name} (${formatNumber(largest.tokens)} tokens)`);
+    } else {
+      printRow("Largest", "N/A");
     }
-  } catch (error) {
-    console.log(`    ${pc.yellow("Warning:")} Could not analyze list_roots payload`);
-    console.log(`    ${pc.dim(`Error: ${error instanceof Error ? error.message : error}`)}`);
+    if (smallest) {
+      printRow("Smallest", `${smallest.name} (${formatNumber(smallest.tokens)} tokens)`);
+    } else {
+      printRow("Smallest", "N/A");
+    }
+  } finally {
+    db.close();
   }
-
-  console.log();
-  db.close();
 }
