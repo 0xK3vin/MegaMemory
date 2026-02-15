@@ -152,7 +152,7 @@ export interface NodeRow {
   updated_at: string;
   removed_at: string | null;
   removed_reason: string | null;
-  embedding: Buffer | null;
+  embedding: Buffer | ArrayBuffer | null;
   merge_group: string | null;
   needs_merge: number; // SQLite stores boolean as 0/1
   source_branch: string | null;

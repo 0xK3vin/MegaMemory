@@ -240,6 +240,68 @@ describe("MergeEngine", () => {
       output.close();
     });
 
+    it("preserves Buffer embeddings through merge round-trip", () => {
+      const left = createTmpDb("left.db");
+      const right = createTmpDb("right.db");
+      const outputPath = path.join(tmpDir, "output.db");
+
+      const leftEmbedding = Buffer.alloc(1536, 0x1a);
+      const rightEmbedding = Buffer.alloc(1536, 0x2b);
+
+      left.db.insertNode({
+        id: "left-emb",
+        name: "Left Embedding",
+        kind: "feature",
+        summary: "Left with embedding",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: leftEmbedding,
+      });
+      right.db.insertNode({
+        id: "right-emb",
+        name: "Right Embedding",
+        kind: "feature",
+        summary: "Right with embedding",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: rightEmbedding,
+      });
+
+      left.db.close();
+      right.db.close();
+
+      engine.merge(left.path, right.path, outputPath);
+
+      const output = new KnowledgeDB(outputPath);
+      const outNodes = output.getAllActiveNodesWithEmbeddings();
+      const leftNode = outNodes.find((node) => node.id === "left-emb");
+      const rightNode = outNodes.find((node) => node.id === "right-emb");
+
+      expect(leftNode).toBeDefined();
+      const outputEmbedding = leftNode!.embedding;
+      expect(Buffer.isBuffer(outputEmbedding)).toBe(true);
+      if (!Buffer.isBuffer(outputEmbedding)) {
+        throw new Error("Expected Buffer embedding");
+      }
+      expect(outputEmbedding).toHaveLength(1536);
+      expect(outputEmbedding.equals(leftEmbedding)).toBe(true);
+
+      expect(rightNode).toBeDefined();
+      const rightOutputEmbedding = rightNode!.embedding;
+      expect(Buffer.isBuffer(rightOutputEmbedding)).toBe(true);
+      if (!Buffer.isBuffer(rightOutputEmbedding)) {
+        throw new Error("Expected Buffer embedding");
+      }
+      expect(rightOutputEmbedding).toHaveLength(1536);
+      expect(rightOutputEmbedding.equals(rightEmbedding)).toBe(true);
+
+      output.close();
+    });
+
     it("merges edges for non-conflicting nodes", () => {
       const left = createTmpDb("left.db");
       const right = createTmpDb("right.db");
