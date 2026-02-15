@@ -11,6 +11,17 @@ export interface MergeOptions {
 }
 
 /**
+ * Convert ArrayBuffer or Buffer to Buffer for libsql compatibility.
+ * libsql returns ArrayBuffer for BLOBs but expects Buffer when binding parameters.
+ */
+function toBuffer(data: Buffer | ArrayBuffer | null): Buffer | null {
+  if (!data) return null;
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  return null;
+}
+
+/**
  * Strip the merge suffix (::left or ::right) from an ID.
  */
 export function stripMergeSuffix(id: string): string {
@@ -406,7 +417,7 @@ export class MergeEngine {
       updated_at: node.updated_at,
       removed_at: node.removed_at,
       removed_reason: node.removed_reason,
-      embedding: node.embedding,
+      embedding: toBuffer(node.embedding),
       merge_group: node.merge_group,
       needs_merge: node.needs_merge,
       source_branch: node.source_branch,
@@ -435,7 +446,7 @@ export class MergeEngine {
       updated_at: node.updated_at,
       removed_at: node.removed_at,
       removed_reason: node.removed_reason,
-      embedding: node.embedding,
+      embedding: toBuffer(node.embedding),
       merge_group: mergeGroup,
       needs_merge: 1,
       source_branch: sourceLabel,
