@@ -51,7 +51,7 @@ npm install -g megamemory
 megamemory install
 ```
 
-Interactive installer — choose your editor:
+Run the interactive installer and choose your editor:
 
 #### With [opencode](https://opencode.ai)
 
@@ -59,7 +59,7 @@ Interactive installer — choose your editor:
 megamemory install --target opencode
 ```
 
-One command configures everything:
+One command configures:
 - MCP server in `~/.config/opencode/opencode.json`
 - Workflow instructions in `~/.config/opencode/AGENTS.md`
 - Skill tool plugin at `~/.config/opencode/tool/megamemory.ts`
@@ -137,11 +137,11 @@ Visualize the knowledge graph in your browser:
 megamemory serve
 ```
 
-- Nodes colored by kind, sized by edge count
-- Dashed edges for parent-child, solid for relationships
-- Click-to-inspect detail panel with summary, files, and edges
-- Search with highlight/dim filtering
-- Interactive port selection if default (`4321`) is taken
+- Nodes are colored by kind and sized by edge count
+- Dashed edges show parent-child links; solid edges show relationships
+- Click any node to inspect summary, files, and edges
+- Search supports highlight/dim filtering
+- If port `4321` is taken, you'll be prompted to pick another
 
 ```bash
 megamemory serve --port 8080   # custom port
@@ -149,7 +149,41 @@ megamemory serve --port 8080   # custom port
 
 ---
 
-### CLI
+### How It Works
+
+<p align="center">
+  <img src="./assets/architecture.svg" alt="MegaMemory architecture diagram" width="800" />
+</p>
+
+```
+src/
+  index.ts       CLI entry + MCP server (8 tools)
+  tools.ts       Tool handlers (understand, create, update, link, remove, list_conflicts, resolve_conflict)
+  db.ts          SQLite persistence (libsql, WAL mode, schema v3)
+  embeddings.ts  In-process embeddings (all-MiniLM-L6-v2, 384 dims)
+  merge.ts       Two-way merge engine for knowledge.db files
+  merge-cli.ts   CLI handlers for merge, conflicts, resolve commands
+  types.ts       TypeScript types
+  cli-utils.ts   Colored output + interactive prompts
+  install.ts     multi-target installer (opencode, Claude Code, Antigravity)
+  web.ts         HTTP server for graph explorer
+plugin/
+  megamemory.ts  Opencode skill tool plugin
+commands/
+  bootstrap-memory.md  /user command for initial population
+  save-memory.md       /user command to save session knowledge
+web/
+  index.html     Single-file graph visualization (d3-force + Canvas)
+```
+
+- **Embeddings** — In-process via [Xenova/all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2) (ONNX, quantized). No API keys, and no network calls after the first model download.
+- **Storage** — SQLite with WAL mode, soft-delete history, and schema migrations (currently v3).
+- **Search** — Brute-force cosine similarity over node embeddings; fast enough for graphs with <10k nodes.
+- **Merge** — Two-way merge with conflict detection by concept ID, with AI-assisted conflict resolution via MCP tools.
+
+---
+
+### CLI Commands
 
 | Command | Description |
 |---------|-------------|
@@ -166,7 +200,7 @@ megamemory serve --port 8080   # custom port
 
 ### Merging Knowledge Graphs
 
-When multiple git branches diverge, each may modify `.megamemory/knowledge.db` independently. Since SQLite files can't be auto-merged by git, megamemory provides a dedicated merge system.
+When branches diverge, each may update `.megamemory/knowledge.db` independently. Since SQLite files cannot be auto-merged by git, megamemory provides dedicated merge commands.
 
 #### Merge two databases
 
@@ -174,7 +208,7 @@ When multiple git branches diverge, each may modify `.megamemory/knowledge.db` i
 megamemory merge main.db feature.db --into merged.db
 ```
 
-The merge compares concepts by ID. Identical concepts are deduplicated. Concepts with the same ID but different content are flagged as conflicts — both versions are kept with `::left`/`::right` suffixed IDs and a shared merge group UUID. Use `--left-label` and `--right-label` to tag versions with branch names instead of the defaults.
+Concepts are compared by ID: identical nodes are deduplicated, and conflicting nodes are kept as `::left`/`::right` variants under one merge group UUID. Use `--left-label` and `--right-label` to replace default side labels with branch names.
 
 ```bash
 megamemory merge main.db feature.db --into merged.db --left-label main --right-label feature-xyz
@@ -198,48 +232,7 @@ megamemory resolve <merge-group-uuid> --keep both    # keep both as separate con
 
 #### AI-assisted resolution
 
-When an AI agent runs `/merge`, it:
-
-1. Calls `list_conflicts` to get all unresolved conflict groups
-2. For each conflict, reads both versions and the actual source files referenced in `file_refs`
-3. Verifies what the code actually does now and writes the correct resolved content
-4. Calls `resolve_conflict` with `resolved: {summary, why?, file_refs?}` and a `reason` explaining what was verified
-
-The agent does NOT just pick a side — it reads the code and writes the truth. The `resolved` object provides the correct summary, rationale, and file references based on the current codebase state.
-
----
-
-### How It Works
-
-<p align="center">
-  <img src="./assets/architecture.svg" alt="MegaMemory architecture diagram" width="800" />
-</p>
-
-```
-src/
-  index.ts       CLI entry + MCP server (8 tools)
-  tools.ts       Tool handlers (understand, create, update, link, remove, list_conflicts, resolve_conflict)
-  db.ts          SQLite persistence (libsql, WAL mode, schema v2)
-  embeddings.ts  In-process embeddings (all-MiniLM-L6-v2, 384 dims)
-  merge.ts       Two-way merge engine for knowledge.db files
-  merge-cli.ts   CLI handlers for merge, conflicts, resolve commands
-  types.ts       TypeScript types
-  cli-utils.ts   Colored output + interactive prompts
-  install.ts     multi-target installer (opencode, Claude Code, Antigravity)
-  web.ts         HTTP server for graph explorer
-plugin/
-  megamemory.ts  Opencode skill tool plugin
-commands/
-  bootstrap-memory.md  /user command for initial population
-  save-memory.md       /user command to save session knowledge
-web/
-  index.html     Single-file graph visualization (Cytoscape.js)
-```
-
-- **Embeddings** — In-process via [Xenova/all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2) (ONNX, quantized). No API keys. No network calls after first model download.
-- **Storage** — SQLite with WAL mode, soft-delete with history, schema migrations (currently v2).
-- **Search** — Brute-force cosine similarity over all node embeddings. Fast enough for knowledge graphs with <10k nodes.
-- **Merge** — Two-way merge with conflict detection. Concepts compared by ID; conflicts get suffixed IDs and shared merge group UUIDs. AI-assisted resolution via MCP tools.
+When an AI agent runs `/merge`, it calls `list_conflicts`, verifies both versions against current source files, then calls `resolve_conflict` with `resolved: {summary, why?, file_refs?}` plus a verification `reason`. It does not pick a side blindly; it resolves to what the codebase currently reflects.
 
 ---
 
