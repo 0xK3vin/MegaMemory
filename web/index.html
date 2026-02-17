@@ -566,7 +566,7 @@ async function fetchTimelineBounds() {
   return (await fetch('/api/timeline/bounds')).json();
 }
 async function fetchTimelineSteps() {
-  return (await fetch('/api/timeline?writes_only=true&limit=50000')).json();
+  return (await fetch('/api/timeline?limit=50000')).json();
 }
 async function fetchGraphAt(timestamp) {
   return (await fetch('/api/graph/at?t=' + encodeURIComponent(timestamp))).json();
