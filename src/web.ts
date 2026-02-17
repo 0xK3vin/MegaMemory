@@ -171,6 +171,217 @@ export async function runServe(port: number): Promise<void> {
     return { nodes, edges };
   }
 
+  function parseBooleanParam(value: string | null): boolean {
+    return value === "true" || value === "1";
+  }
+
+  function clampInt(value: string | null, defaultValue: number, min: number, max: number): number {
+    const parsed = Number.parseInt(value ?? "", 10);
+    if (!Number.isFinite(parsed)) return defaultValue;
+    return Math.min(max, Math.max(min, parsed));
+  }
+
+  function safeJsonParse(raw: string): unknown {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  type TimelineEntryView = {
+    seq: number;
+    timestamp: string;
+    tool: string;
+    params?: unknown;
+    result_summary: string;
+    is_write: boolean;
+    is_error: boolean;
+    affected_ids: string[];
+  };
+
+  type TimelineQueryOptions = {
+    writesOnly?: boolean;
+    tool?: string;
+    since?: string;
+    until?: string;
+    limit?: number;
+  };
+
+  function parseAffectedIds(raw: string): string[] {
+    const parsed = safeJsonParse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((value): value is string => typeof value === "string");
+  }
+
+  function buildNodeTimestampEntries(): TimelineEntryView[] {
+    const staged: Array<{
+      timestamp: string;
+      tool: string;
+      params?: unknown;
+      result_summary: string;
+      is_write: boolean;
+      is_error: boolean;
+      affected_ids: string[];
+      order: number;
+    }> = [];
+
+    const nodes = db.getAllNodesRaw();
+    for (const node of nodes) {
+      if (node.created_at) {
+        staged.push({
+          timestamp: node.created_at,
+          tool: "create_concept",
+          params: { id: node.id, kind: node.kind, parent_id: node.parent_id },
+          result_summary: `created ${node.id}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [node.id],
+          order: 0,
+        });
+      }
+
+      if (node.updated_at && node.updated_at !== node.created_at) {
+        staged.push({
+          timestamp: node.updated_at,
+          tool: "update_concept",
+          params: { id: node.id },
+          result_summary: `updated ${node.id}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [node.id],
+          order: 1,
+        });
+      }
+
+      if (node.removed_at) {
+        staged.push({
+          timestamp: node.removed_at,
+          tool: "remove_concept",
+          params: { id: node.id },
+          result_summary: `removed ${node.id}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [node.id],
+          order: 2,
+        });
+      }
+    }
+
+    staged.sort((a, b) => {
+      const timestampCmp = a.timestamp.localeCompare(b.timestamp);
+      if (timestampCmp !== 0) return timestampCmp;
+      const orderCmp = a.order - b.order;
+      if (orderCmp !== 0) return orderCmp;
+      return (a.affected_ids[0] ?? "").localeCompare(b.affected_ids[0] ?? "");
+    });
+
+    return staged.map((entry, index) => ({
+      seq: index + 1,
+      timestamp: entry.timestamp,
+      tool: entry.tool,
+      params: entry.params,
+      result_summary: entry.result_summary,
+      is_write: entry.is_write,
+      is_error: entry.is_error,
+      affected_ids: entry.affected_ids,
+    }));
+  }
+
+  function buildMergedTimelineEntries(options: TimelineQueryOptions = {}): {
+    entries: TimelineEntryView[];
+    source: "merged" | "timeline" | "node_timestamps";
+  } {
+    const syntheticEntries = buildNodeTimestampEntries()
+      .filter((entry) => !options.tool || entry.tool === options.tool)
+      .filter((entry) => !options.since || entry.timestamp >= options.since)
+      .filter((entry) => !options.until || entry.timestamp <= options.until);
+
+    const bounds = db.getTimelineBounds();
+    const realEntries = bounds.count > 0
+      ? db.getTimelineEntries({
+          writesOnly: options.writesOnly,
+          tool: options.tool,
+          since: options.since,
+          until: options.until,
+        }).map((row) => ({
+          seq: row.seq,
+          timestamp: row.timestamp,
+          tool: row.tool,
+          params: safeJsonParse(row.params),
+          result_summary: row.result_summary,
+          is_write: row.is_write === 1,
+          is_error: row.is_error === 1,
+          affected_ids: parseAffectedIds(row.affected_ids),
+        }))
+      : [];
+
+    const realCreateIds = new Set<string>();
+    const realUpdateIds = new Set<string>();
+    const realRemoveIds = new Set<string>();
+    for (const entry of realEntries) {
+      if (entry.tool === "create_concept") {
+        for (const id of entry.affected_ids) realCreateIds.add(id);
+      } else if (entry.tool === "update_concept") {
+        for (const id of entry.affected_ids) realUpdateIds.add(id);
+      } else if (entry.tool === "remove_concept") {
+        for (const id of entry.affected_ids) realRemoveIds.add(id);
+      }
+    }
+
+    const dedupedSyntheticEntries = syntheticEntries
+      .filter((entry) => !options.writesOnly || entry.is_write)
+      .filter((entry) => {
+        const id = entry.affected_ids[0];
+        if (!id) return true;
+        if (entry.tool === "create_concept") return !realCreateIds.has(id);
+        if (entry.tool === "update_concept") return !realUpdateIds.has(id);
+        if (entry.tool === "remove_concept") return !realRemoveIds.has(id);
+        return true;
+      });
+
+    const merged = [...realEntries, ...dedupedSyntheticEntries]
+      .map((entry, idx) => ({ entry, idx }))
+      .sort((a, b) => {
+        const timestampCmp = a.entry.timestamp.localeCompare(b.entry.timestamp);
+        if (timestampCmp !== 0) return timestampCmp;
+        return a.idx - b.idx;
+      })
+      .map(({ entry }, idx) => ({
+        ...entry,
+        seq: idx + 1,
+      }));
+
+    const limited = typeof options.limit === "number" ? merged.slice(0, options.limit) : merged;
+
+    const source = realEntries.length > 0 && dedupedSyntheticEntries.length > 0
+      ? "merged"
+      : realEntries.length > 0
+      ? "timeline"
+      : "node_timestamps";
+
+    return { entries: limited, source };
+  }
+
+  function sampleEntries<T>(entries: T[], n: number): T[] {
+    if (entries.length <= n) return entries;
+    if (n <= 1) return [entries[0]];
+
+    const sampled: T[] = [];
+    const maxIndex = entries.length - 1;
+    const step = maxIndex / (n - 1);
+    const seen = new Set<number>();
+
+    for (let i = 0; i < n; i += 1) {
+      const index = i === n - 1 ? maxIndex : Math.round(i * step);
+      if (seen.has(index)) continue;
+      seen.add(index);
+      sampled.push(entries[index]);
+    }
+
+    return sampled;
+  }
+
   function initializeSseSnapshot(): void {
     const nodes = db.getAllActiveNodes();
     const edges = db.getAllEdges();
@@ -438,6 +649,89 @@ export async function runServe(port: number): Promise<void> {
       req.on("close", () => {
         sseClients = sseClients.filter((client) => client !== res);
       });
+      return;
+    }
+
+    if (pathname === "/api/timeline/bounds" && req.method === "GET") {
+      const merged = buildMergedTimelineEntries();
+      if (merged.entries.length > 0) {
+        json(res, {
+          first: merged.entries[0].timestamp,
+          last: merged.entries[merged.entries.length - 1].timestamp,
+          count: merged.entries.length,
+          source: merged.source,
+        });
+        return;
+      }
+
+      json(res, { first: null, last: null, count: 0, source: "none" as const });
+      return;
+    }
+
+    if (pathname === "/api/timeline/ticks" && req.method === "GET") {
+      const n = clampInt(url.searchParams.get("n"), 100, 1, 500);
+      const merged = buildMergedTimelineEntries();
+      const ticks = sampleEntries(merged.entries, n).map((row) => ({
+        seq: row.seq,
+        timestamp: row.timestamp,
+        tool: row.tool,
+        result_summary: row.result_summary,
+      }));
+      json(res, { ticks, source: merged.source });
+      return;
+    }
+
+    if (pathname === "/api/timeline" && req.method === "GET") {
+      const writesOnly = parseBooleanParam(url.searchParams.get("writes_only"));
+      const tool = (url.searchParams.get("tool") ?? "").trim();
+      const since = (url.searchParams.get("since") ?? "").trim();
+      const until = (url.searchParams.get("until") ?? "").trim();
+      const limit = clampInt(url.searchParams.get("limit"), 1000, 1, 50000);
+      const { entries, source } = buildMergedTimelineEntries({
+        writesOnly,
+        tool: tool || undefined,
+        since: since || undefined,
+        until: until || undefined,
+        limit,
+      });
+
+      json(res, { entries, source });
+      return;
+    }
+
+    if (pathname === "/api/graph/at" && req.method === "GET") {
+      const t = (url.searchParams.get("t") ?? "").trim();
+      if (!t) {
+        json(res, { error: "Missing required query parameter: t" }, 400);
+        return;
+      }
+
+      const nodes = db.getNodesAtTime(t).map((n) => ({
+        id: n.id,
+        name: n.name,
+        kind: n.kind,
+        summary: n.summary,
+        parent_id: n.parent_id,
+        edge_count: 0,
+      }));
+
+      const edges = db.getEdgesAtTime(t).map((e) => ({
+        from: e.from_id,
+        to: e.to_id,
+        relation: e.relation,
+        description: e.description,
+      }));
+
+      const edgeCounts = new Map<string, number>();
+      for (const edge of edges) {
+        edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+        edgeCounts.set(edge.to, (edgeCounts.get(edge.to) ?? 0) + 1);
+      }
+      for (const node of nodes) {
+        node.edge_count = edgeCounts.get(node.id) ?? 0;
+      }
+
+      json(res, { nodes, edges });
       return;
     }
 

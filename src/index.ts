@@ -5,6 +5,7 @@ import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import pc from "picocolors";
 import { errorBold, validatePort } from "./cli-utils.js";
+import { createTimelineLogger } from "./timeline.js";
 
 // ---- CLI routing ----
 
@@ -165,6 +166,7 @@ async function startMcpServer() {
     path.join(process.cwd(), ".megamemory", "knowledge.db");
 
   const db = new KnowledgeDB(DB_PATH);
+  const timeline = createTimelineLogger(db);
 
   const server = new McpServer({
     name: "megamemory",
@@ -191,8 +193,24 @@ async function startMcpServer() {
     async (params) => {
       try {
         const result = await understand(db, { query: params.query, top_k: params.top_k });
+        timeline.log({
+          tool: "understand",
+          params: { query: params.query, top_k: params.top_k },
+          result_summary: `${result.matches.length} matches`,
+          is_write: false,
+          is_error: false,
+          affected_ids: result.matches.map((match) => match.id),
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "understand",
+          params: { query: params.query, top_k: params.top_k },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: false,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -227,8 +245,24 @@ async function startMcpServer() {
           edges: params.edges?.map((e) => ({ ...e, relation: e.relation as RelationType })),
           created_by_task: params.created_by_task,
         });
+        timeline.log({
+          tool: "create_concept",
+          params: { name: params.name, kind: params.kind, parent_id: params.parent_id },
+          result_summary: `created ${result.id}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [result.id],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "create_concept",
+          params: { name: params.name, kind: params.kind, parent_id: params.parent_id },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: true,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -253,8 +287,24 @@ async function startMcpServer() {
           id: params.id,
           changes: { ...params.changes, kind: params.changes.kind as NodeKind | undefined },
         });
+        timeline.log({
+          tool: "update_concept",
+          params: { id: params.id, changed_fields: Object.keys(params.changes) },
+          result_summary: `updated ${params.id}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [params.id],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "update_concept",
+          params: { id: params.id, changed_fields: Object.keys(params.changes) },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: true,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -276,8 +326,24 @@ async function startMcpServer() {
           relation: params.relation as RelationType,
           description: params.description,
         });
+        timeline.log({
+          tool: "link",
+          params: { from: params.from, to: params.to, relation: params.relation },
+          result_summary: `linked ${params.from} -> ${params.to}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [params.from, params.to],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "link",
+          params: { from: params.from, to: params.to, relation: params.relation },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: true,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -293,8 +359,24 @@ async function startMcpServer() {
     async (params) => {
       try {
         const result = removeConcept(db, { id: params.id, reason: params.reason });
+        timeline.log({
+          tool: "remove_concept",
+          params: { id: params.id },
+          result_summary: `removed ${params.id}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [params.id],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "remove_concept",
+          params: { id: params.id },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: true,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -307,8 +389,24 @@ async function startMcpServer() {
     async () => {
       try {
         const result = listRoots(db);
+        timeline.log({
+          tool: "list_roots",
+          params: {},
+          result_summary: `${result.roots.length} roots`,
+          is_write: false,
+          is_error: false,
+          affected_ids: [],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify({ ...result, stats: db.getStats() }, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "list_roots",
+          params: {},
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: false,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -321,8 +419,24 @@ async function startMcpServer() {
     async () => {
       try {
         const result = listConflicts(db);
+        timeline.log({
+          tool: "list_conflicts",
+          params: {},
+          result_summary: `${result.conflicts.length} conflict groups`,
+          is_write: false,
+          is_error: false,
+          affected_ids: [],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "list_conflicts",
+          params: {},
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: false,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }
@@ -347,8 +461,24 @@ async function startMcpServer() {
           resolved: params.resolved,
           reason: params.reason,
         });
+        timeline.log({
+          tool: "resolve_conflict",
+          params: { merge_group: params.merge_group },
+          result_summary: `resolved ${params.merge_group}`,
+          is_write: true,
+          is_error: false,
+          affected_ids: [],
+        });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
+        timeline.log({
+          tool: "resolve_conflict",
+          params: { merge_group: params.merge_group },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: true,
+          is_error: true,
+          affected_ids: [],
+        });
         return formatError(err);
       }
     }

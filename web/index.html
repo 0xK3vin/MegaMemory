@@ -383,6 +383,83 @@
   #empty-state.visible { display: block; }
   #empty-state h2 { font-size: 20px; font-weight: 600; margin-bottom: 8px; color: var(--text-dim); }
   #empty-state p { font-size: 13px; }
+
+  /* ---- Timeline bar ---- */
+  #timeline-bar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    z-index: 10;
+  }
+  #timeline-bar.active { display: flex; }
+
+  #timeline-toggle {
+    padding: 3px 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  #timeline-toggle:hover { border-color: var(--accent); color: var(--text); }
+  #timeline-toggle.live { background: #22c55e22; color: #22c55e; border-color: #22c55e44; }
+
+  #timeline-slider {
+    flex: 1;
+    height: 4px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  #timeline-display {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+    width: 340px;
+    flex-shrink: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #timeline-controls { display: flex; align-items: center; gap: 6px; }
+
+  #timeline-play {
+    padding: 2px 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #timeline-play:hover { border-color: var(--accent); color: var(--text); }
+
+  #timeline-speed {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 11px;
+    padding: 2px 4px;
+  }
+
+  #timeline-summary {
+    font-size: 10px;
+    color: var(--text-muted, var(--text-dim));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    width: 300px;
+    flex-shrink: 0;
+  }
 </style>
 </head>
 <body>
@@ -408,6 +485,22 @@
     <div id="panel-content"></div>
   </aside>
 </main>
+
+<div id="timeline-bar">
+  <button id="timeline-toggle" class="live" title="Switch between Live and Timeline mode">● Live</button>
+  <div id="timeline-controls" style="display:none">
+    <button id="timeline-play" title="Play/Pause">▶</button>
+    <select id="timeline-speed" title="Playback speed">
+      <option value="100">Fast</option>
+      <option value="250" selected>Normal</option>
+      <option value="500">Slow</option>
+      <option value="1000">Slower</option>
+    </select>
+  </div>
+  <input id="timeline-slider" type="range" min="0" max="1" value="1" step="1" style="display:none" />
+  <span id="timeline-display"></span>
+  <span id="timeline-summary"></span>
+</div>
 
 <footer id="stats"></footer>
 
@@ -451,6 +544,12 @@ let activeSearchIndex = -1;
 let searchRequestId = 0;
 let evtSource = null;
 let sseConnected = false;
+let timelineMode = false;
+let timelineSteps = [];
+let timelineSource = 'none';
+let timelineFetchId = 0;
+let timelinePlayInterval = null;
+let timelinePlaying = false;
 
 // ---- API ----
 
@@ -462,6 +561,15 @@ async function fetchSemanticSearch(query, topK) {
   const response = await fetch('/api/search?' + params.toString());
   const data = await response.json();
   return { ok: response.ok, status: response.status, data };
+}
+async function fetchTimelineBounds() {
+  return (await fetch('/api/timeline/bounds')).json();
+}
+async function fetchTimelineSteps() {
+  return (await fetch('/api/timeline?writes_only=true&limit=50000')).json();
+}
+async function fetchGraphAt(timestamp) {
+  return (await fetch('/api/graph/at?t=' + encodeURIComponent(timestamp))).json();
 }
 
 function setEmptyStateVisible(visible) {
@@ -495,6 +603,7 @@ function connectSSE() {
 }
 
 function handleSSE(msg) {
+  if (timelineMode) return;
   if (!msg || !msg.type) return;
   switch (msg.type) {
     case 'init':
@@ -801,10 +910,10 @@ function buildGraphData(data) {
 
 function initSimulation() {
   simulation = d3.forceSimulation([])
-    .force('charge', d3.forceManyBody().strength(d => d._hasChildren ? -300 : -180).distanceMin(15).distanceMax(500))
-    .force('center', d3.forceCenter(width / 2, height / 2).strength(0.04))
-    .force('collision', d3.forceCollide().radius(d => d.radius + 12).strength(0.6).iterations(2))
-    .force('link', d3.forceLink([]).id(d => d.id).distance(d => d.isParentEdge ? 90 : 200).strength(d => d.isParentEdge ? 0.4 : 0.15))
+    .force('charge', d3.forceManyBody().strength(d => d._hasChildren ? -500 : -300).distanceMin(20).distanceMax(800))
+    .force('center', d3.forceCenter(width / 2, height / 2).strength(0.02))
+    .force('collision', d3.forceCollide().radius(d => d.radius + 35).strength(0.7).iterations(3))
+    .force('link', d3.forceLink([]).id(d => d.id).distance(d => d.isParentEdge ? 120 : 260).strength(d => d.isParentEdge ? 0.35 : 0.12))
     .alphaDecay(0.015)
     .velocityDecay(0.35)
     .on('tick', () => {});
@@ -946,7 +1055,7 @@ function drawEdges(now) {
     const cx = (sx + tx) * 0.5 + nx * curve;
     const cy = (sy + ty) * 0.5 + ny * curve;
 
-    const dimAlpha = edge.dimmed ? 0.08 : 0.65;
+    const dimAlpha = edge.dimmed ? 0.08 : 0.45;
     const age = now - edge.birthTime;
     const progress = Math.max(0, Math.min(1, age / 350));
     const pulse = computePulse(edge.pulseTime, now);
@@ -1002,7 +1111,7 @@ function drawEdges(now) {
       ctx.restore();
     }
 
-    if (!edge.isParentEdge && edge.relation && progress > 0.65) {
+    if (!edge.isParentEdge && edge.relation && progress > 0.65 && zoom > 1.5) {
       const screenDistance = len * zoom;
       if (screenDistance <= 120) continue;
       const t = 0.5;
@@ -1711,6 +1820,280 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// ---- Timeline ----
+
+function stopTimelinePlayback() {
+  if (timelinePlayInterval) {
+    clearInterval(timelinePlayInterval);
+    timelinePlayInterval = null;
+  }
+  timelinePlaying = false;
+  const playBtn = document.getElementById('timeline-play');
+  if (playBtn) playBtn.textContent = '▶';
+}
+
+function updateTimelineDisplay(stepIndex) {
+  const display = document.getElementById('timeline-display');
+  const summary = document.getElementById('timeline-summary');
+  if (!display || !summary) return;
+
+  if (stepIndex >= timelineSteps.length) {
+    display.textContent = '● Live';
+    summary.textContent = '';
+    return;
+  }
+
+  const step = timelineSteps[stepIndex];
+  display.textContent = `Step ${stepIndex + 1}/${timelineSteps.length} · ${step.tool} · ${step.timestamp}`;
+  summary.textContent = step.result_summary || '';
+}
+
+async function scrubToStep(stepIndex) {
+  if (!timelineMode) return;
+
+  updateTimelineDisplay(stepIndex);
+  const requestId = ++timelineFetchId;
+  const prevPositions = new Map(nodes.map(node => [node.id, { x: node.x, y: node.y, vx: node.vx || 0, vy: node.vy || 0, birthTime: node.birthTime }]));
+  const prevIds = new Set(nodes.map(node => node.id));
+  const prevEdgeBirthTimes = new Map(
+    edges.map(edge => {
+      const sid = typeof edge.source === 'object' ? edge.source.id : edge.source;
+      const tid = typeof edge.target === 'object' ? edge.target.id : edge.target;
+      return [`${sid}|${tid}|${edge.relation}`, edge.birthTime];
+    })
+  );
+
+  let data;
+  if (stepIndex >= timelineSteps.length) {
+    data = await fetchGraph();
+  } else {
+    data = await fetchGraphAt(timelineSteps[stepIndex].timestamp);
+  }
+
+  if (!timelineMode || requestId !== timelineFetchId) return;
+
+  buildGraphData(data);
+  const now = performance.now();
+  for (const node of nodes) {
+    const prev = prevPositions.get(node.id);
+    if (prev) {
+      node.x = prev.x;
+      node.y = prev.y;
+      node.vx = prev.vx;
+      node.vy = prev.vy;
+      node.birthTime = prev.birthTime;
+      node.pulseTime = null;
+    } else if (!prevIds.has(node.id)) {
+      node.birthTime = now;
+    }
+  }
+  for (const edge of edges) {
+    const sid = typeof edge.source === 'object' ? edge.source.id : edge.source;
+    const tid = typeof edge.target === 'object' ? edge.target.id : edge.target;
+    const key = `${sid}|${tid}|${edge.relation}`;
+    const prevBirth = prevEdgeBirthTimes.get(key);
+    if (prevBirth !== undefined) {
+      edge.birthTime = prevBirth;
+    } else {
+      edge.birthTime = now;
+    }
+  }
+
+  refreshSimulation(0.15);
+  setEmptyStateVisible(nodes.length === 0);
+}
+
+function startTimelinePlayback() {
+  if (!timelineMode || timelineSteps.length === 0 || timelinePlaying) return;
+
+  const slider = document.getElementById('timeline-slider');
+  const speedSelect = document.getElementById('timeline-speed');
+  const playBtn = document.getElementById('timeline-play');
+  if (!slider || !speedSelect || !playBtn) return;
+
+  const current = Number(slider.value);
+  if (current >= timelineSteps.length) return;
+
+  timelinePlaying = true;
+  playBtn.textContent = '⏸';
+
+  const speed = Number(speedSelect.value) || 250;
+  timelinePlayInterval = setInterval(() => {
+    if (!timelineMode) {
+      stopTimelinePlayback();
+      return;
+    }
+    const next = Number(slider.value) + 1;
+    slider.value = String(next);
+    void scrubToStep(next);
+    if (next >= timelineSteps.length) {
+      stopTimelinePlayback();
+    }
+  }, speed);
+}
+
+async function enterTimelineMode() {
+  if (timelineMode) return;
+  timelineMode = true;
+  stopTimelinePlayback();
+
+  const toggle = document.getElementById('timeline-toggle');
+  const controls = document.getElementById('timeline-controls');
+  const slider = document.getElementById('timeline-slider');
+  if (!toggle || !controls || !slider) {
+    timelineMode = false;
+    return;
+  }
+
+  const payload = await fetchTimelineSteps();
+  const steps = Array.isArray(payload.entries) ? payload.entries : [];
+  if (steps.length === 0) {
+    timelineMode = false;
+    alert('No timeline entries available yet.');
+    return;
+  }
+
+  timelineSteps = steps;
+  timelineSource = payload.source || 'none';
+
+  slider.min = '0';
+  slider.max = String(steps.length);
+  slider.value = String(steps.length);
+  slider.style.display = '';
+  controls.style.display = 'flex';
+
+  toggle.classList.remove('live');
+  toggle.textContent = '◷ Timeline';
+  toggle.title = `Timeline source: ${timelineSource}`;
+
+  if (evtSource) {
+    evtSource.close();
+    evtSource = null;
+    sseConnected = false;
+  }
+
+  updateTimelineDisplay(steps.length);
+}
+
+async function exitTimelineMode() {
+  if (!timelineMode) return;
+  timelineMode = false;
+  timelineFetchId += 1;
+  stopTimelinePlayback();
+
+  const toggle = document.getElementById('timeline-toggle');
+  const controls = document.getElementById('timeline-controls');
+  const slider = document.getElementById('timeline-slider');
+  const display = document.getElementById('timeline-display');
+  const summary = document.getElementById('timeline-summary');
+
+  if (controls) controls.style.display = 'none';
+  if (slider) {
+    slider.style.display = 'none';
+    slider.value = '1';
+    slider.min = '0';
+    slider.max = '1';
+  }
+  if (toggle) {
+    toggle.classList.add('live');
+    toggle.textContent = '● Live';
+    toggle.title = 'Switch between Live and Timeline mode';
+  }
+  if (display) display.textContent = '';
+  if (summary) summary.textContent = '';
+
+  timelineSteps = [];
+  timelineSource = 'none';
+
+  const prevPositions = new Map(nodes.map(node => [node.id, { x: node.x, y: node.y, vx: node.vx || 0, vy: node.vy || 0, birthTime: node.birthTime }]));
+  const prevEdgeBirthTimes = new Map(
+    edges.map(edge => {
+      const sid = typeof edge.source === 'object' ? edge.source.id : edge.source;
+      const tid = typeof edge.target === 'object' ? edge.target.id : edge.target;
+      return [`${sid}|${tid}|${edge.relation}`, edge.birthTime];
+    })
+  );
+  const [graphData, stats] = await Promise.all([fetchGraph(), fetchStats()]);
+  buildGraphData(graphData);
+  const now = performance.now();
+  for (const node of nodes) {
+    const prev = prevPositions.get(node.id);
+    if (!prev) continue;
+    node.x = prev.x;
+    node.y = prev.y;
+    node.vx = prev.vx;
+    node.vy = prev.vy;
+    node.birthTime = prev.birthTime;
+    node.pulseTime = null;
+  }
+  for (const edge of edges) {
+    const sid = typeof edge.source === 'object' ? edge.source.id : edge.source;
+    const tid = typeof edge.target === 'object' ? edge.target.id : edge.target;
+    const key = `${sid}|${tid}|${edge.relation}`;
+    const prevBirth = prevEdgeBirthTimes.get(key);
+    if (prevBirth !== undefined) {
+      edge.birthTime = prevBirth;
+    } else {
+      edge.birthTime = now;
+    }
+  }
+
+  refreshSimulation(0.15);
+  setEmptyStateVisible(graphData.nodes.length === 0);
+  renderStats(stats);
+  connectSSE();
+}
+
+function setupTimeline() {
+  const bar = document.getElementById('timeline-bar');
+  const toggle = document.getElementById('timeline-toggle');
+  const slider = document.getElementById('timeline-slider');
+  const play = document.getElementById('timeline-play');
+  const speed = document.getElementById('timeline-speed');
+  const display = document.getElementById('timeline-display');
+  if (!bar || !toggle || !slider || !play || !speed) return;
+
+  bar.classList.add('active');
+
+  void fetchTimelineBounds().then((bounds) => {
+    if (!display) return;
+    if (!bounds || !bounds.count) {
+      display.textContent = '● Live';
+      return;
+    }
+    display.textContent = `● Live · ${bounds.count} events`;
+  }).catch(() => {
+    if (display) display.textContent = '● Live';
+  });
+
+  toggle.addEventListener('click', () => {
+    if (timelineMode) {
+      void exitTimelineMode();
+      return;
+    }
+    void enterTimelineMode();
+  });
+
+  slider.addEventListener('input', () => {
+    stopTimelinePlayback();
+    void scrubToStep(Number(slider.value));
+  });
+
+  play.addEventListener('click', () => {
+    if (timelinePlaying) {
+      stopTimelinePlayback();
+      return;
+    }
+    startTimelinePlayback();
+  });
+
+  speed.addEventListener('change', () => {
+    if (!timelinePlaying) return;
+    stopTimelinePlayback();
+    startTimelinePlayback();
+  });
+}
+
 // ---- Init ----
 
 async function init() {
@@ -1720,7 +2103,7 @@ async function init() {
   window.addEventListener('resize', () => {
     setupCanvas();
     if (simulation) {
-      simulation.force('center', d3.forceCenter(width / 2, height / 2).strength(0.04));
+      simulation.force('center', d3.forceCenter(width / 2, height / 2).strength(0.02));
       simulation.alpha(Math.max(simulation.alpha(), 0.3)).restart();
     }
   });
@@ -1741,6 +2124,7 @@ async function init() {
 
   setupSearch();
   connectSSE();
+  setupTimeline();
 }
 
 init();
