@@ -9,18 +9,18 @@ allowed-tools: "megamemory:*"
 
 # Megamemory — Project Knowledge Graph
 
-Your persistent memory of the codebase. You write concepts as you work. You query them before starting new tasks. The graph survives across sessions.
+Your persistent memory of the codebase. You have no implicit memory of this project between sessions, so this graph is your continuity. You write concepts as you work, and you query them before starting tasks.
 
 ## When to Use
 
-- **Session start** → \`list_roots\` to orient yourself
-- **Before any task** → \`understand\` to load relevant context
-- **After any task** → \`create_concept\` / \`update_concept\` / \`link\` to record what you did
-- **Refactoring or removing features** → \`remove_concept\` to mark things as gone (with reason)
+- **Session start** → You must call \`list_roots\` before beginning work
+- **Before any task** → You must call \`understand\` before reading source files for project understanding
+- **After any task** → You must call \`create_concept\` / \`update_concept\` / \`link\` to record what you did
+- **Refactoring or removing features** → You must call \`remove_concept\` to mark things as gone (with reason)
 
 ## Core Principles
 
-1. **Query before work, update after work.** Always.
+1. **Query before work, update after work.** This is required, not optional.
 2. **Concepts, not code.** Nodes are features, patterns, decisions — not files or symbols.
 3. **Be specific.** Include parameter names, defaults, file paths, rationale.
 4. **Keep it shallow.** Max 3 levels deep. Useful beats exhaustive.

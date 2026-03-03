@@ -50,13 +50,13 @@ const AGENTS_MD_MARKER = "## Project Knowledge Graph";
 const AGENTS_MD_SNIPPET = `
 ## Project Knowledge Graph
 
-You have access to a project knowledge graph via the \`megamemory\` MCP server and skill tool. This is your persistent memory of the codebase — concepts, architecture, decisions, and how things connect. You write it. You read it. The graph is your memory across sessions.
+You have access to a project knowledge graph via the \`megamemory\` MCP server and skill tool. You have no implicit memory of this project between sessions, so this graph is your only continuity for concepts, architecture, decisions, and relationships.
 
 **Workflow: understand → work → update**
 
-1. **Session start:** Call \`megamemory\` tool with action \`overview\` (or \`megamemory:list_roots\` directly) to orient yourself.
-2. **Before each task:** Call \`megamemory\` tool with action \`query\` (or \`megamemory:understand\` directly) to load relevant context.
-3. **After each task:** Call \`megamemory\` tool with action \`record\` to create/update/link concepts for what you built.
+1. **Session start:** You must call \`megamemory\` with action \`overview\` (or \`megamemory:list_roots\` directly) before you begin work.
+2. **Before each task:** You must call \`megamemory\` with action \`query\` (or \`megamemory:understand\` directly) before reading source files for project understanding.
+3. **After each task:** You must call \`megamemory\` with action \`record\` to create/update/link concepts for what you built.
 
 Be specific in summaries: include parameter names, defaults, file locations, and rationale. Keep concepts max 3 levels deep.
 `;
