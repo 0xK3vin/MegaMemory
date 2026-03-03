@@ -276,7 +276,8 @@ async function setupOpencodeMcpConfig(runtime: CommandRuntime): Promise<void> {
     } catch {
       const backup = `${OPENCODE_CONFIG_PATH}.bak`;
       fs.copyFileSync(OPENCODE_CONFIG_PATH, backup);
-      info(`Backed up malformed config to ${pc.dim(backup)}`);
+      warn(`Could not parse ${pc.dim(OPENCODE_CONFIG_PATH)}; backed it up to ${pc.dim(backup)}.`);
+      warn("Created a fresh config with only the megamemory entry. Merge your old settings from the backup if needed.");
       config = {};
     }
   }
@@ -318,7 +319,8 @@ async function setupClaudeConfig(runtime: CommandRuntime): Promise<void> {
     } catch (err) {
       const backup = `${CLAUDE_CONFIG_PATH}.bak`;
       fs.copyFileSync(CLAUDE_CONFIG_PATH, backup);
-      warn(`Malformed ${pc.dim(CLAUDE_CONFIG_PATH)} detected; backed it up to ${pc.dim(backup)}`);
+      warn(`Could not parse ${pc.dim(CLAUDE_CONFIG_PATH)}; backed it up to ${pc.dim(backup)}.`);
+      warn("Created a fresh config with only the megamemory entry. Merge your old settings from the backup if needed.");
       throw new Error(
         err instanceof Error
           ? `Could not parse ${CLAUDE_CONFIG_PATH}: ${err.message}`
@@ -357,7 +359,8 @@ async function setupAntigravityConfig(runtime: CommandRuntime): Promise<void> {
     } catch {
       const backup = `${ANTIGRAVITY_CONFIG_PATH}.bak`;
       fs.copyFileSync(ANTIGRAVITY_CONFIG_PATH, backup);
-      warn(`Malformed ${pc.dim(ANTIGRAVITY_CONFIG_PATH)} detected; backed it up to ${pc.dim(backup)}`);
+      warn(`Could not parse ${pc.dim(ANTIGRAVITY_CONFIG_PATH)}; backed it up to ${pc.dim(backup)}.`);
+      warn("Created a fresh config with only the megamemory entry. Merge your old settings from the backup if needed.");
       config = {};
     }
   }
