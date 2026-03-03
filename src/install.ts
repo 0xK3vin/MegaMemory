@@ -65,6 +65,79 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function stripJsonComments(text: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n" || char === "\r") {
+        inLineComment = false;
+        result += char;
+      }
+      continue;
+    }
+
+    if (inBlockComment) {
+      if (char === "*" && nextChar === "/") {
+        inBlockComment = false;
+        i += 1;
+        continue;
+      }
+      if (char === "\n" || char === "\r") {
+        result += char;
+      }
+      continue;
+    }
+
+    if (inString) {
+      result += char;
+
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      result += char;
+      continue;
+    }
+
+    if (char === "/" && nextChar === "/") {
+      inLineComment = true;
+      i += 1;
+      continue;
+    }
+
+    if (char === "/" && nextChar === "*") {
+      inBlockComment = true;
+      i += 1;
+      continue;
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
+function parseJsonc(text: string): unknown {
+  return JSON.parse(stripJsonComments(text));
+}
+
 function resolveServerEntryPoint(): string {
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -198,7 +271,7 @@ async function setupOpencodeMcpConfig(runtime: CommandRuntime): Promise<void> {
   let config: Record<string, unknown> = {};
   if (fs.existsSync(OPENCODE_CONFIG_PATH)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(OPENCODE_CONFIG_PATH, "utf-8"));
+      const parsed = parseJsonc(fs.readFileSync(OPENCODE_CONFIG_PATH, "utf-8"));
       config = isObject(parsed) ? parsed : {};
     } catch {
       const backup = `${OPENCODE_CONFIG_PATH}.bak`;
@@ -237,7 +310,7 @@ async function setupClaudeConfig(runtime: CommandRuntime): Promise<void> {
 
   if (fs.existsSync(CLAUDE_CONFIG_PATH)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(CLAUDE_CONFIG_PATH, "utf-8"));
+      const parsed = parseJsonc(fs.readFileSync(CLAUDE_CONFIG_PATH, "utf-8"));
       if (!isObject(parsed)) {
         throw new Error("Top-level JSON value is not an object");
       }
@@ -279,7 +352,7 @@ async function setupAntigravityConfig(runtime: CommandRuntime): Promise<void> {
 
   if (fs.existsSync(ANTIGRAVITY_CONFIG_PATH)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(ANTIGRAVITY_CONFIG_PATH, "utf-8"));
+      const parsed = parseJsonc(fs.readFileSync(ANTIGRAVITY_CONFIG_PATH, "utf-8"));
       config = isObject(parsed) ? parsed : {};
     } catch {
       const backup = `${ANTIGRAVITY_CONFIG_PATH}.bak`;
