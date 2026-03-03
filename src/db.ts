@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs";
 import type { NodeRow, EdgeRow } from "./types.js";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export class KnowledgeDB {
   private db: Database.Database;
@@ -18,127 +18,173 @@ export class KnowledgeDB {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+    this.db.pragma("busy_timeout = 1000");
+    this.db.pragma("synchronous = NORMAL");
     this.migrate();
   }
 
-  private migrate(): void {
+  private getUserVersion(): number {
     const pragmaResult = this.db.pragma("user_version", { simple: true });
     // libsql returns { user_version: N } instead of raw N like better-sqlite3
-    const version = (
+    return (
       typeof pragmaResult === "object" && pragmaResult !== null
         ? (pragmaResult as Record<string, unknown>).user_version
         : pragmaResult
     ) as number;
+  }
 
-    if (version < 1) {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS nodes (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          kind TEXT NOT NULL,
-          summary TEXT NOT NULL,
-          why TEXT,
-          file_refs TEXT,
-          parent_id TEXT,
-          created_by_task TEXT,
-          created_at TEXT DEFAULT (datetime('now')),
-          updated_at TEXT DEFAULT (datetime('now')),
-          removed_at TEXT,
-          removed_reason TEXT,
-          embedding BLOB,
-          merge_group TEXT,
-          needs_merge INTEGER DEFAULT 0,
-          source_branch TEXT,
-          merge_timestamp TEXT,
-          FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE SET NULL
-        );
+  private migrate(): void {
+    const version = this.getUserVersion();
+    if (version >= SCHEMA_VERSION) return;
 
-        CREATE TABLE IF NOT EXISTS edges (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          from_id TEXT NOT NULL,
-          to_id TEXT NOT NULL,
-          relation TEXT NOT NULL,
-          description TEXT,
-          created_at TEXT DEFAULT (datetime('now')),
-          merge_group TEXT,
-          needs_merge INTEGER DEFAULT 0,
-          source_branch TEXT,
-          merge_timestamp TEXT,
-          FOREIGN KEY (from_id) REFERENCES nodes(id) ON DELETE CASCADE,
-          FOREIGN KEY (to_id) REFERENCES nodes(id) ON DELETE CASCADE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
-        CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
-        CREATE INDEX IF NOT EXISTS idx_nodes_removed ON nodes(removed_at);
-        CREATE INDEX IF NOT EXISTS idx_nodes_merge_group ON nodes(merge_group);
-        CREATE INDEX IF NOT EXISTS idx_nodes_needs_merge ON nodes(needs_merge);
-        CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
-        CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
-        CREATE INDEX IF NOT EXISTS idx_edges_merge_group ON edges(merge_group);
-        CREATE INDEX IF NOT EXISTS idx_edges_needs_merge ON edges(needs_merge);
-      `);
-    }
-
-    if (version < 2) {
-      // Add merge-related columns for existing v1 databases
-      const nodeColumns = this.db
-        .prepare("PRAGMA table_info(nodes)")
-        .all() as Array<{ name: string }>;
-      const nodeColNames = new Set(nodeColumns.map((c) => c.name));
-
-      if (!nodeColNames.has("merge_group")) {
-        this.db.exec(`
-          ALTER TABLE nodes ADD COLUMN merge_group TEXT;
-          ALTER TABLE nodes ADD COLUMN needs_merge INTEGER DEFAULT 0;
-          ALTER TABLE nodes ADD COLUMN source_branch TEXT;
-          ALTER TABLE nodes ADD COLUMN merge_timestamp TEXT;
-          CREATE INDEX IF NOT EXISTS idx_nodes_merge_group ON nodes(merge_group);
-          CREATE INDEX IF NOT EXISTS idx_nodes_needs_merge ON nodes(needs_merge);
-        `);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      // Re-check after acquiring the write lock in case another process migrated first.
+      const currentVersion = this.getUserVersion();
+      if (currentVersion >= SCHEMA_VERSION) {
+        this.db.exec("COMMIT");
+        return;
       }
 
-      const edgeColumns = this.db
-        .prepare("PRAGMA table_info(edges)")
-        .all() as Array<{ name: string }>;
-      const edgeColNames = new Set(edgeColumns.map((c) => c.name));
-
-      if (!edgeColNames.has("merge_group")) {
+      if (currentVersion < 1) {
         this.db.exec(`
-          ALTER TABLE edges ADD COLUMN merge_group TEXT;
-          ALTER TABLE edges ADD COLUMN needs_merge INTEGER DEFAULT 0;
-          ALTER TABLE edges ADD COLUMN source_branch TEXT;
-          ALTER TABLE edges ADD COLUMN merge_timestamp TEXT;
+          CREATE TABLE IF NOT EXISTS nodes (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            why TEXT,
+            file_refs TEXT,
+            parent_id TEXT,
+            created_by_task TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            removed_at TEXT,
+            removed_reason TEXT,
+            embedding BLOB,
+            merge_group TEXT,
+            needs_merge INTEGER DEFAULT 0,
+            source_branch TEXT,
+            merge_timestamp TEXT,
+            FOREIGN KEY (parent_id) REFERENCES nodes(id) ON DELETE SET NULL
+          );
+
+          CREATE TABLE IF NOT EXISTS edges (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_id TEXT NOT NULL,
+            to_id TEXT NOT NULL,
+            relation TEXT NOT NULL,
+            description TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            merge_group TEXT,
+            needs_merge INTEGER DEFAULT 0,
+            source_branch TEXT,
+            merge_timestamp TEXT,
+            FOREIGN KEY (from_id) REFERENCES nodes(id) ON DELETE CASCADE,
+            FOREIGN KEY (to_id) REFERENCES nodes(id) ON DELETE CASCADE
+          );
+
+          CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_id);
+          CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);
+          CREATE INDEX IF NOT EXISTS idx_nodes_removed ON nodes(removed_at);
+          CREATE INDEX IF NOT EXISTS idx_nodes_merge_group ON nodes(merge_group);
+          CREATE INDEX IF NOT EXISTS idx_nodes_needs_merge ON nodes(needs_merge);
+          CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
+          CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_id);
+          CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
           CREATE INDEX IF NOT EXISTS idx_edges_merge_group ON edges(merge_group);
           CREATE INDEX IF NOT EXISTS idx_edges_needs_merge ON edges(needs_merge);
         `);
       }
-    }
 
-    if (version < 3) {
-      // Add timeline table for version 3
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS timeline (
-          seq INTEGER PRIMARY KEY AUTOINCREMENT,
-          timestamp TEXT DEFAULT (datetime('now')),
-          tool TEXT NOT NULL,
-          params TEXT NOT NULL,
-          result_summary TEXT NOT NULL,
-          is_write INTEGER NOT NULL,
-          is_error INTEGER NOT NULL,
-          affected_ids TEXT NOT NULL
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_timeline_timestamp ON timeline(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_timeline_tool ON timeline(tool);
-        CREATE INDEX IF NOT EXISTS idx_timeline_is_write ON timeline(is_write);
-        CREATE INDEX IF NOT EXISTS idx_timeline_is_error ON timeline(is_error);
-      `);
-    }
+      if (currentVersion < 2) {
+        // Add merge-related columns for existing v1 databases
+        const nodeColumns = this.db
+          .prepare("PRAGMA table_info(nodes)")
+          .all() as Array<{ name: string }>;
+        const nodeColNames = new Set(nodeColumns.map((c) => c.name));
 
-    if (version < SCHEMA_VERSION) {
+        if (!nodeColNames.has("merge_group")) {
+          this.db.exec(`
+            ALTER TABLE nodes ADD COLUMN merge_group TEXT;
+            ALTER TABLE nodes ADD COLUMN needs_merge INTEGER DEFAULT 0;
+            ALTER TABLE nodes ADD COLUMN source_branch TEXT;
+            ALTER TABLE nodes ADD COLUMN merge_timestamp TEXT;
+            CREATE INDEX IF NOT EXISTS idx_nodes_merge_group ON nodes(merge_group);
+            CREATE INDEX IF NOT EXISTS idx_nodes_needs_merge ON nodes(needs_merge);
+          `);
+        }
+
+        const edgeColumns = this.db
+          .prepare("PRAGMA table_info(edges)")
+          .all() as Array<{ name: string }>;
+        const edgeColNames = new Set(edgeColumns.map((c) => c.name));
+
+        if (!edgeColNames.has("merge_group")) {
+          this.db.exec(`
+            ALTER TABLE edges ADD COLUMN merge_group TEXT;
+            ALTER TABLE edges ADD COLUMN needs_merge INTEGER DEFAULT 0;
+            ALTER TABLE edges ADD COLUMN source_branch TEXT;
+            ALTER TABLE edges ADD COLUMN merge_timestamp TEXT;
+            CREATE INDEX IF NOT EXISTS idx_edges_merge_group ON edges(merge_group);
+            CREATE INDEX IF NOT EXISTS idx_edges_needs_merge ON edges(needs_merge);
+          `);
+        }
+      }
+
+      if (currentVersion < 3) {
+        // Add timeline table for version 3
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS timeline (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT DEFAULT (datetime('now')),
+            tool TEXT NOT NULL,
+            params TEXT NOT NULL,
+            result_summary TEXT NOT NULL,
+            is_write INTEGER NOT NULL,
+            is_error INTEGER NOT NULL,
+            affected_ids TEXT NOT NULL
+          );
+          
+          CREATE INDEX IF NOT EXISTS idx_timeline_timestamp ON timeline(timestamp);
+          CREATE INDEX IF NOT EXISTS idx_timeline_tool ON timeline(tool);
+          CREATE INDEX IF NOT EXISTS idx_timeline_is_write ON timeline(is_write);
+          CREATE INDEX IF NOT EXISTS idx_timeline_is_error ON timeline(is_error);
+        `);
+      }
+
+      if (currentVersion < 4) {
+        this.db.exec(`
+          DELETE FROM edges
+          WHERE id NOT IN (
+            SELECT MIN(id)
+            FROM edges
+            GROUP BY from_id, to_id, relation
+          )
+        `);
+        this.db.exec(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique
+          ON edges(from_id, to_id, relation)
+        `);
+      }
+
       this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      this.db.exec("COMMIT");
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
+  runInTransaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      this.db.exec("ROLLBACK");
+      throw err;
     }
   }
 
@@ -169,6 +215,48 @@ export class KnowledgeDB {
       parent_id: node.parent_id ?? null,
       created_by_task: node.created_by_task ?? null,
       embedding: node.embedding ?? null,
+    });
+  }
+
+  insertNodeAndEdges(
+    node: {
+      id: string;
+      name: string;
+      kind: string;
+      summary: string;
+      why: string | null;
+      file_refs: string | null;
+      parent_id: string | null;
+      created_by_task: string | null;
+      embedding: Buffer | null;
+    },
+    edges: Array<{ to_id: string; relation: string; description: string | null }>
+  ): void {
+    this.runInTransaction(() => {
+      this.insertNode({
+        id: node.id,
+        name: node.name,
+        kind: node.kind,
+        summary: node.summary,
+        why: node.why,
+        file_refs: node.file_refs
+          ? (JSON.parse(node.file_refs) as string[])
+          : null,
+        parent_id: node.parent_id,
+        created_by_task: node.created_by_task,
+        embedding: node.embedding,
+      });
+
+      for (const edge of edges) {
+        if (this.nodeExists(edge.to_id)) {
+          this.insertEdge({
+            from_id: node.id,
+            to_id: edge.to_id,
+            relation: edge.relation,
+            description: edge.description,
+          });
+        }
+      }
     });
   }
 
@@ -258,9 +346,9 @@ export class KnowledgeDB {
     to_id: string;
     relation: string;
     description?: string | null;
-  }): number {
+  }): { id: number; inserted: boolean } {
     const stmt = this.db.prepare(`
-      INSERT INTO edges (from_id, to_id, relation, description)
+      INSERT OR IGNORE INTO edges (from_id, to_id, relation, description)
       VALUES (@from_id, @to_id, @relation, @description)
     `);
     const result = stmt.run({
@@ -269,7 +357,10 @@ export class KnowledgeDB {
       relation: edge.relation,
       description: edge.description ?? null,
     });
-    return Number(result.lastInsertRowid);
+    return {
+      id: Number(result.lastInsertRowid),
+      inserted: result.changes > 0,
+    };
   }
 
   deleteEdge(fromId: string, toId: string, relation: string): boolean {
@@ -477,8 +568,7 @@ export class KnowledgeDB {
     this.db.pragma("foreign_keys = OFF");
     try {
       let changed = false;
-      this.db.exec("BEGIN");
-      try {
+      this.runInTransaction(() => {
         const result = this.db
           .prepare("UPDATE nodes SET id = @newId, updated_at = datetime('now') WHERE id = @oldId")
           .run({ oldId, newId });
@@ -497,11 +587,7 @@ export class KnowledgeDB {
             .prepare("UPDATE edges SET to_id = @newId WHERE to_id = @oldId")
             .run({ oldId, newId });
         }
-        this.db.exec("COMMIT");
-      } catch (err) {
-        this.db.exec("ROLLBACK");
-        throw err;
-      }
+      });
       return changed;
     } finally {
       this.db.pragma("foreign_keys = ON");
@@ -590,7 +676,7 @@ export class KnowledgeDB {
     merge_timestamp?: string | null;
   }): number {
     const stmt = this.db.prepare(`
-      INSERT INTO edges (from_id, to_id, relation, description, created_at,
+      INSERT OR IGNORE INTO edges (from_id, to_id, relation, description, created_at,
         merge_group, needs_merge, source_branch, merge_timestamp)
       VALUES (@from_id, @to_id, @relation, @description, @created_at,
         @merge_group, @needs_merge, @source_branch, @merge_timestamp)

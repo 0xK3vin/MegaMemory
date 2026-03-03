@@ -457,7 +457,7 @@ describe("KnowledgeDB timeline", () => {
   });
 
   describe("schema migration", () => {
-    it("verifies schema version is 3", () => {
+    it("verifies schema version is 4", () => {
       const rawDb = new Database(dbPath);
       const pragmaResult = rawDb.pragma("user_version", { simple: true }) as
         | number
@@ -468,7 +468,7 @@ describe("KnowledgeDB timeline", () => {
         typeof pragmaResult === "object"
           ? pragmaResult.user_version
           : pragmaResult;
-      expect(version).toBe(3);
+      expect(version).toBe(4);
     });
 
     it("verifies timeline table exists with correct columns", () => {

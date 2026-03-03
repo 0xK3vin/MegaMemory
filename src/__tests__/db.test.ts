@@ -345,6 +345,123 @@ describe("KnowledgeDB", () => {
       expect(edges[0].from_id).toBe("node-a");
       expect(edges[0].to_id).toBe("node-b");
     });
+
+    it("silently ignores duplicate edges", () => {
+      const first = db.insertEdge({
+        from_id: "node-a",
+        to_id: "node-b",
+        relation: "depends_on",
+        description: "first",
+      });
+      const second = db.insertEdge({
+        from_id: "node-a",
+        to_id: "node-b",
+        relation: "depends_on",
+        description: "duplicate",
+      });
+
+      expect(first.inserted).toBe(true);
+      expect(second.inserted).toBe(false);
+      expect(db.getAllEdges()).toHaveLength(1);
+    });
+
+    it("allows multiple relations between the same nodes", () => {
+      const depends = db.insertEdge({
+        from_id: "node-a",
+        to_id: "node-b",
+        relation: "depends_on",
+        description: null,
+      });
+      const calls = db.insertEdge({
+        from_id: "node-a",
+        to_id: "node-b",
+        relation: "calls",
+        description: null,
+      });
+
+      expect(depends.inserted).toBe(true);
+      expect(calls.inserted).toBe(true);
+      expect(db.getAllEdges()).toHaveLength(2);
+    });
+  });
+
+  describe("transactions", () => {
+    it("insertNodeAndEdges inserts node and valid edges atomically", () => {
+      db.insertNode({
+        id: "target",
+        name: "Target",
+        kind: "feature",
+        summary: "target",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: null,
+      });
+
+      db.insertNodeAndEdges(
+        {
+          id: "source",
+          name: "Source",
+          kind: "feature",
+          summary: "source",
+          why: null,
+          file_refs: JSON.stringify(["src/source.ts"]),
+          parent_id: null,
+          created_by_task: null,
+          embedding: null,
+        },
+        [{ to_id: "target", relation: "calls", description: "source calls target" }]
+      );
+
+      expect(db.getNode("source")).toBeDefined();
+      const outgoing = db.getOutgoingEdges("source");
+      expect(outgoing).toHaveLength(1);
+      expect(outgoing[0].to_id).toBe("target");
+      expect(outgoing[0].relation).toBe("calls");
+    });
+
+    it("insertNodeAndEdges skips edges to nonexistent targets", () => {
+      db.insertNodeAndEdges(
+        {
+          id: "source-only",
+          name: "Source Only",
+          kind: "feature",
+          summary: "source",
+          why: null,
+          file_refs: null,
+          parent_id: null,
+          created_by_task: null,
+          embedding: null,
+        },
+        [{ to_id: "missing", relation: "calls", description: null }]
+      );
+
+      expect(db.getNode("source-only")).toBeDefined();
+      expect(db.getOutgoingEdges("source-only")).toHaveLength(0);
+      expect(db.getAllEdges()).toHaveLength(0);
+    });
+
+    it("runInTransaction rolls back when callback throws", () => {
+      expect(() => {
+        db.runInTransaction(() => {
+          db.insertNode({
+            id: "rolled-back",
+            name: "Rolled Back",
+            kind: "feature",
+            summary: "should not persist",
+            why: null,
+            file_refs: null,
+            parent_id: null,
+            created_by_task: null,
+            embedding: null,
+          });
+          throw new Error("force rollback");
+        });
+      }).toThrow("force rollback");
+
+      expect(db.getNode("rolled-back")).toBeUndefined();
+    });
   });
 
   describe("schema v2 - merge columns", () => {

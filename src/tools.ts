@@ -155,33 +155,24 @@ export async function createConcept(
   const text = embeddingText(input.name, input.kind, input.summary);
   const embedding = await embed(text);
 
-  // Insert node
-  db.insertNode({
-    id,
-    name: input.name,
-    kind: input.kind,
-    summary: input.summary,
-    why: input.why,
-    file_refs: input.file_refs,
-    parent_id: input.parent_id,
-    created_by_task: input.created_by_task,
-    embedding,
-  });
-
-  // Create edges if specified
-  if (input.edges) {
-    for (const edge of input.edges) {
-      // Only create edge if target exists
-      if (db.nodeExists(edge.to)) {
-        db.insertEdge({
-          from_id: id,
-          to_id: edge.to,
-          relation: edge.relation,
-          description: edge.description,
-        });
-      }
-    }
-  }
+  db.insertNodeAndEdges(
+    {
+      id,
+      name: input.name,
+      kind: input.kind,
+      summary: input.summary,
+      why: input.why ?? null,
+      file_refs: input.file_refs ? JSON.stringify(input.file_refs) : null,
+      parent_id: input.parent_id ?? null,
+      created_by_task: input.created_by_task ?? null,
+      embedding,
+    },
+    (input.edges ?? []).map((edge) => ({
+      to_id: edge.to,
+      relation: edge.relation,
+      description: edge.description ?? null,
+    }))
+  );
 
   return { id, message: `Created concept "${id}"` };
 }
@@ -230,12 +221,18 @@ export function link(
     throw new Error(`Target concept "${input.to}" not found.`);
   }
 
-  const edgeId = db.insertEdge({
+  const { id: edgeId, inserted } = db.insertEdge({
     from_id: input.from,
     to_id: input.to,
     relation: input.relation,
     description: input.description,
   });
+
+  if (!inserted) {
+    return {
+      message: `Relationship "${input.relation}" from "${input.from}" to "${input.to}" already exists.`,
+    };
+  }
 
   return {
     message: `Created ${input.relation} link from "${input.from}" to "${input.to}" (edge #${edgeId})`,
