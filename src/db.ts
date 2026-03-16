@@ -7,6 +7,7 @@ const SCHEMA_VERSION = 4;
 
 export class KnowledgeDB {
   private db: Database.Database;
+  private _txDepth = 0;
 
   constructor(dbPath: string) {
     // Ensure directory exists
@@ -18,7 +19,7 @@ export class KnowledgeDB {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
-    this.db.pragma("busy_timeout = 1000");
+    this.db.pragma("busy_timeout = 5000");
     this.db.pragma("synchronous = NORMAL");
     this.migrate();
   }
@@ -177,14 +178,49 @@ export class KnowledgeDB {
   }
 
   runInTransaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN IMMEDIATE");
+    if (this._txDepth > 0) {
+      // Already inside a transaction — just run the function
+      this._txDepth++;
+      try {
+        return fn();
+      } finally {
+        this._txDepth--;
+      }
+    }
+
+    this._txDepth++;
     try {
-      const result = fn();
-      this.db.exec("COMMIT");
-      return result;
-    } catch (err) {
-      this.db.exec("ROLLBACK");
-      throw err;
+      return this.runWithRetry(() => {
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          const result = fn();
+          this.db.exec("COMMIT");
+          return result;
+        } catch (err) {
+          this.db.exec("ROLLBACK");
+          throw err;
+        }
+      });
+    } finally {
+      this._txDepth--;
+    }
+  }
+
+  runWithRetry<T>(fn: () => T, maxRetries = 3): T {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return fn();
+      } catch (err: unknown) {
+        const isBusy =
+          err instanceof Error &&
+          (err.message.includes("SQLITE_BUSY") ||
+            err.message.includes("database is locked"));
+        if (!isBusy || attempt >= maxRetries) {
+          throw err;
+        }
+        const delayMs = 50 * Math.pow(2, attempt);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+      }
     }
   }
 
@@ -323,20 +359,22 @@ export class KnowledgeDB {
   }
 
   softDeleteNode(id: string, reason: string): boolean {
-    const stmt = this.db.prepare(`
-      UPDATE nodes SET removed_at = datetime('now'), removed_reason = @reason, updated_at = datetime('now')
-      WHERE id = @id AND removed_at IS NULL
-    `);
-    const result = stmt.run({ id, reason });
+    let changed = false;
+    this.runInTransaction(() => {
+      const stmt = this.db.prepare(`
+        UPDATE nodes SET removed_at = datetime('now'), removed_reason = @reason, updated_at = datetime('now')
+        WHERE id = @id AND removed_at IS NULL
+      `);
+      const result = stmt.run({ id, reason });
 
-    // Also remove edges involving this node
-    if (result.changes > 0) {
-      this.db
-        .prepare("DELETE FROM edges WHERE from_id = ? OR to_id = ?")
-        .run(id, id);
-    }
-
-    return result.changes > 0;
+      if (result.changes > 0) {
+        changed = true;
+        this.db
+          .prepare("DELETE FROM edges WHERE from_id = ? OR to_id = ?")
+          .run(id, id);
+      }
+    });
+    return changed;
   }
 
   // ---- Edge CRUD ----
@@ -609,11 +647,15 @@ export class KnowledgeDB {
   }
 
   hardDeleteNode(id: string): boolean {
-    this.deleteEdgesForNode(id);
-    const result = this.db
-      .prepare("DELETE FROM nodes WHERE id = ?")
-      .run(id);
-    return result.changes > 0;
+    let changed = false;
+    this.runInTransaction(() => {
+      this.deleteEdgesForNode(id);
+      const result = this.db
+        .prepare("DELETE FROM nodes WHERE id = ?")
+        .run(id);
+      changed = result.changes > 0;
+    });
+    return changed;
   }
 
   insertNodeRaw(node: {

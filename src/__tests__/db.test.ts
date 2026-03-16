@@ -462,6 +462,125 @@ describe("KnowledgeDB", () => {
 
       expect(db.getNode("rolled-back")).toBeUndefined();
     });
+
+    it("runInTransaction supports nesting without error", () => {
+      db.runInTransaction(() => {
+        db.insertNode({
+          id: "outer-node",
+          name: "Outer",
+          kind: "feature",
+          summary: "outer",
+          why: null,
+          file_refs: null,
+          parent_id: null,
+          created_by_task: null,
+          embedding: null,
+        });
+        db.runInTransaction(() => {
+          db.insertNode({
+            id: "inner-node",
+            name: "Inner",
+            kind: "feature",
+            summary: "inner",
+            why: null,
+            file_refs: null,
+            parent_id: null,
+            created_by_task: null,
+            embedding: null,
+          });
+        });
+      });
+
+      expect(db.getNode("outer-node")).toBeDefined();
+      expect(db.getNode("inner-node")).toBeDefined();
+    });
+
+    it("nested runInTransaction rollback rolls back outer transaction", () => {
+      expect(() => {
+        db.runInTransaction(() => {
+          db.insertNode({
+            id: "rollback-outer",
+            name: "Outer",
+            kind: "feature",
+            summary: "outer",
+            why: null,
+            file_refs: null,
+            parent_id: null,
+            created_by_task: null,
+            embedding: null,
+          });
+          db.runInTransaction(() => {
+            throw new Error("inner failure");
+          });
+        });
+      }).toThrow("inner failure");
+
+      expect(db.getNode("rollback-outer")).toBeUndefined();
+    });
+
+    it("runWithRetry retries on SQLITE_BUSY and succeeds", () => {
+      let attempts = 0;
+      const result = db.runWithRetry(() => {
+        attempts++;
+        if (attempts < 3) throw new Error("SQLITE_BUSY");
+        return "success";
+      }, 3);
+
+      expect(result).toBe("success");
+      expect(attempts).toBe(3);
+    });
+
+    it("runWithRetry throws after max retries exceeded", () => {
+      expect(() => {
+        db.runWithRetry(() => {
+          throw new Error("SQLITE_BUSY");
+        }, 2);
+      }).toThrow("SQLITE_BUSY");
+    });
+
+    it("runWithRetry does not retry non-busy errors", () => {
+      let attempts = 0;
+      expect(() => {
+        db.runWithRetry(() => {
+          attempts++;
+          throw new Error("UNIQUE constraint failed");
+        }, 3);
+      }).toThrow("UNIQUE constraint failed");
+
+      expect(attempts).toBe(1);
+    });
+
+    it("softDeleteNode removes edges atomically", () => {
+      db.insertNode({
+        id: "del-a",
+        name: "A",
+        kind: "feature",
+        summary: "a",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: null,
+      });
+      db.insertNode({
+        id: "del-b",
+        name: "B",
+        kind: "feature",
+        summary: "b",
+        why: null,
+        file_refs: null,
+        parent_id: null,
+        created_by_task: null,
+        embedding: null,
+      });
+      db.insertEdge({ from_id: "del-a", to_id: "del-b", relation: "calls" });
+
+      db.softDeleteNode("del-a", "test deletion");
+
+      const edges = db.getAllEdges();
+      const edgesToA = edges.filter((e) => e.from_id === "del-a" || e.to_id === "del-a");
+      expect(edgesToA).toHaveLength(0);
+    });
   });
 
   describe("schema v2 - merge columns", () => {

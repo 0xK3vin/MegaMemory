@@ -353,44 +353,43 @@ export async function resolveConflict(
   const base = nodes.find((n) => n.removed_at === null) ?? nodes[0];
   const originalId = stripMergeSuffix(base.id);
 
-  // Delete all conflict copies except the base
-  for (const node of nodes) {
-    if (node.id !== base.id) {
-      db.hardDeleteNode(node.id);
-    }
-  }
+  const text = embeddingText(base.name, base.kind, input.resolved.summary);
+  const newEmbedding = await embed(text);
 
-  // Rename the base back to the original clean ID
-  if (base.id !== originalId) {
-    const renamed = db.renameNodeId(base.id, originalId);
-    if (!renamed) {
-      throw new Error(`Failed to rename resolved node from ${base.id} to ${originalId}`);
-    }
-  }
-
-  // Apply the resolved content
   const changes: { summary?: string; why?: string; file_refs?: string[] } = {
     summary: input.resolved.summary,
   };
   if (input.resolved.why !== undefined) changes.why = input.resolved.why;
   if (input.resolved.file_refs !== undefined) changes.file_refs = input.resolved.file_refs;
 
-  const updated = db.updateNode(originalId, changes);
-  if (!updated) {
-    throw new Error(`Failed to apply resolved content to ${originalId}`);
-  }
+  db.runInTransaction(() => {
+    // Delete all conflict copies except the base
+    for (const node of nodes) {
+      if (node.id !== base.id) {
+        db.hardDeleteNode(node.id);
+      }
+    }
 
-  // Regenerate embedding with the resolved summary
-  const node = db.getNode(originalId);
-  if (node) {
-    const text = embeddingText(node.name, node.kind, input.resolved.summary);
-    const newEmbedding = await embed(text);
+    // Rename the base back to the original clean ID
+    if (base.id !== originalId) {
+      const renamed = db.renameNodeId(base.id, originalId);
+      if (!renamed) {
+        throw new Error(`Failed to rename resolved node from ${base.id} to ${originalId}`);
+      }
+    }
+
+    // Apply the resolved content
+    const updated = db.updateNode(originalId, changes);
+    if (!updated) {
+      throw new Error(`Failed to apply resolved content to ${originalId}`);
+    }
+
     db.updateNode(originalId, { embedding: newEmbedding });
-  }
 
-  // Clear merge flags on the resolved node and any associated edges
-  db.clearNodeMergeFlags(originalId);
-  db.clearEdgeMergeFlagsByGroup(input.merge_group);
+    // Clear merge flags on the resolved node and any associated edges
+    db.clearNodeMergeFlags(originalId);
+    db.clearEdgeMergeFlagsByGroup(input.merge_group);
+  });
 
   return {
     message: `Resolved "${originalId}". Reason: ${input.reason}`,

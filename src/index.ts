@@ -168,6 +168,25 @@ async function startMcpServer() {
   const db = new KnowledgeDB(DB_PATH);
   const timeline = createTimelineLogger(db);
 
+  let dbClosed = false;
+  function shutdown() {
+    if (dbClosed) return;
+    dbClosed = true;
+    try {
+      db.close();
+    } catch {
+      // ignore
+    }
+  }
+  process.on("SIGINT", () => {
+    shutdown();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    shutdown();
+    process.exit(0);
+  });
+
   const server = new McpServer({
     name: "megamemory",
     version: VERSION,
