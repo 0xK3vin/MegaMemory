@@ -88,6 +88,16 @@ megamemory install --target antigravity
 Configures:
 - MCP server in `./mcp_config.json` (workspace-level)
 
+#### With [Codex](https://openai.com/codex)
+
+```bash
+megamemory install --target codex
+```
+
+Configures:
+- MCP server in `~/.codex/config.toml`
+- Workflow instructions in `~/.codex/AGENTS.md`
+
 #### With other MCP clients
 
 Add megamemory as a stdio MCP server. The command is just `megamemory` (no arguments). It reads/writes `.megamemory/knowledge.db` relative to the working directory, or set `MEGAMEMORY_DB_PATH` to override.
@@ -165,7 +175,7 @@ src/
   merge-cli.ts   CLI handlers for merge, conflicts, resolve commands
   types.ts       TypeScript types
   cli-utils.ts   Colored output + interactive prompts
-  install.ts     multi-target installer (opencode, Claude Code, Antigravity)
+  install.ts     multi-target installer (opencode, Claude Code, Antigravity, Codex)
   web.ts         HTTP server for graph explorer
 plugin/
   megamemory.ts  Opencode skill tool plugin

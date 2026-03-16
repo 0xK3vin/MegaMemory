@@ -29,7 +29,7 @@ ${pc.bold("Commands:")}
   ${pc.cyan("resolve")}         Resolve a merge conflict
 
 ${pc.bold("Options:")}
-  ${pc.cyan("--target")} ${pc.dim("NAME")}    Install target (opencode, claudecode, antigravity)
+  ${pc.cyan("--target")} ${pc.dim("NAME")}    Install target (opencode, claudecode, antigravity, codex)
   ${pc.cyan("--port")} ${pc.dim("PORT")}     Port for the web explorer ${pc.dim("(default: 4321)")}
   ${pc.cyan("--into")} ${pc.dim("FILE")}     Output path for merge ${pc.dim("(default: overwrites file1)")}
   ${pc.cyan("--left-label")}    Label for left side in merge ${pc.dim("(default: left)")}

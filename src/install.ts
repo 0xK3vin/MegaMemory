@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import pc from "picocolors";
 import { success, skip, error, info, heading, warn, multiSelect } from "./cli-utils.js";
 
-export type InstallTarget = "opencode" | "claudecode" | "antigravity";
+export type InstallTarget = "opencode" | "claudecode" | "antigravity" | "codex";
 
 interface TargetConfig {
   label: string;
@@ -44,6 +44,10 @@ const CLAUDE_MD_PATH = path.join(CLAUDE_DIR, "CLAUDE.md");
 const CLAUDE_COMMANDS_DIR = path.join(CLAUDE_DIR, "commands");
 
 const ANTIGRAVITY_CONFIG_PATH = path.join(process.cwd(), "mcp_config.json");
+
+const CODEX_DIR = path.join(os.homedir(), ".codex");
+const CODEX_CONFIG_PATH = path.join(CODEX_DIR, "config.toml");
+const CODEX_AGENTS_MD_PATH = path.join(CODEX_DIR, "AGENTS.md");
 
 const AGENTS_MD_MARKER = "## Project Knowledge Graph";
 
@@ -189,6 +193,19 @@ async function detectGlobalCommand(): Promise<CommandRuntime> {
     stdioCommand: "node",
     stdioArgs: [entry],
   };
+}
+
+async function detectCodexCli(): Promise<boolean> {
+  const { execSync } = await import("child_process");
+  try {
+    execSync(
+      process.platform === "win32" ? "where codex" : "which codex",
+      { stdio: "ignore" }
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function setupInstructionFile(filePath: string): void {
@@ -384,6 +401,94 @@ async function setupAntigravityConfig(runtime: CommandRuntime): Promise<void> {
   info(`Command: ${pc.cyan(JSON.stringify([runtime.stdioCommand, ...runtime.stdioArgs]))}`);
 }
 
+function buildCodexToml(runtime: CommandRuntime): string {
+  const escapedCommand = runtime.stdioCommand.replace(/\\/g, "\\\\");
+  const escapedArgs = runtime.stdioArgs.map((a) => a.replace(/\\/g, "\\\\"));
+  const argsToml =
+    escapedArgs.length === 0
+      ? "[]"
+      : `[${escapedArgs.map((a) => `"${a}"`).join(", ")}]`;
+  return `[mcp_servers.megamemory]\ncommand = "${escapedCommand}"\nargs = ${argsToml}\n`;
+}
+
+function replaceOrAppendTomlSection(
+  existing: string,
+  sectionHeader: string,
+  newSection: string
+): string {
+  const headerIndex = existing.indexOf(sectionHeader);
+  if (headerIndex === -1) {
+    const separator = existing.endsWith("\n") ? "\n" : "\n\n";
+    return existing + separator + newSection;
+  }
+  const afterHeader = existing.indexOf("\n", headerIndex);
+  if (afterHeader === -1) {
+    return existing.slice(0, headerIndex) + newSection;
+  }
+  const rest = existing.slice(afterHeader + 1);
+  const nextSectionMatch = rest.match(/^\[(?!mcp_servers\.megamemory)/m);
+  if (nextSectionMatch && nextSectionMatch.index !== undefined) {
+    return (
+      existing.slice(0, headerIndex) + newSection + rest.slice(nextSectionMatch.index)
+    );
+  }
+  return existing.slice(0, headerIndex) + newSection;
+}
+
+function writeCodexTomlFallback(runtime: CommandRuntime): void {
+  fs.mkdirSync(CODEX_DIR, { recursive: true });
+  const tomlBlock = buildCodexToml(runtime);
+
+  if (fs.existsSync(CODEX_CONFIG_PATH)) {
+    const existing = fs.readFileSync(CODEX_CONFIG_PATH, "utf-8");
+    const updated = replaceOrAppendTomlSection(
+      existing,
+      "[mcp_servers.megamemory]",
+      tomlBlock
+    );
+    const existed = existing.includes("[mcp_servers.megamemory]");
+    fs.writeFileSync(CODEX_CONFIG_PATH, updated);
+    success(
+      existed
+        ? `Updated megamemory MCP in ${pc.dim(CODEX_CONFIG_PATH)}`
+        : `Added megamemory MCP to ${pc.dim(CODEX_CONFIG_PATH)}`
+    );
+  } else {
+    fs.writeFileSync(CODEX_CONFIG_PATH, tomlBlock);
+    success(`Created ${pc.dim(CODEX_CONFIG_PATH)}`);
+  }
+  info(
+    `Command: ${pc.cyan(JSON.stringify([runtime.stdioCommand, ...runtime.stdioArgs]))}`
+  );
+}
+
+async function setupCodexConfig(runtime: CommandRuntime): Promise<void> {
+  const hasCodexCli = await detectCodexCli();
+
+  if (hasCodexCli) {
+    const { execSync } = await import("child_process");
+
+    try {
+      execSync("codex mcp remove megamemory", { stdio: "pipe" });
+    } catch {
+      // Expected if megamemory wasn't previously configured
+    }
+
+    const addArgs = [runtime.stdioCommand, ...runtime.stdioArgs];
+    const addCmd = `codex mcp add megamemory -- ${addArgs.join(" ")}`;
+    try {
+      execSync(addCmd, { stdio: "pipe" });
+      success(`Configured megamemory MCP via codex CLI`);
+      info(`Command: ${pc.cyan(JSON.stringify(addArgs))}`);
+      return;
+    } catch {
+      warn(`codex CLI failed, falling back to manual config`);
+    }
+  }
+
+  writeCodexTomlFallback(runtime);
+}
+
 function createTargetConfigs(runtime: CommandRuntime): Record<InstallTarget, TargetConfig> {
   return {
     opencode: {
@@ -426,10 +531,18 @@ function createTargetConfigs(runtime: CommandRuntime): Record<InstallTarget, Tar
         { name: "MCP server config", run: () => setupAntigravityConfig(runtime) },
       ],
     },
+    codex: {
+      label: "Codex",
+      description: "MCP server, AGENTS.md",
+      steps: [
+        { name: "MCP server config", run: () => setupCodexConfig(runtime) },
+        { name: "Global AGENTS.md", run: () => setupInstructionFile(CODEX_AGENTS_MD_PATH) },
+      ],
+    },
   };
 }
 
-const VALID_TARGETS: InstallTarget[] = ["opencode", "claudecode", "antigravity"];
+const VALID_TARGETS: InstallTarget[] = ["opencode", "claudecode", "antigravity", "codex"];
 
 function parseTargets(args: string[]): InstallTarget[] {
   const selected = new Set<InstallTarget>();
@@ -488,6 +601,11 @@ async function chooseTargetsInteractively(): Promise<InstallTarget[]> {
       label: "Antigravity",
       value: "antigravity",
       description: "MCP server config (workspace-level)",
+    },
+    {
+      label: "Codex",
+      value: "codex" as InstallTarget,
+      description: "MCP server, AGENTS.md",
     },
   ]);
 
@@ -571,6 +689,11 @@ export async function runInstall(args: string[]): Promise<void> {
     if (targets.includes("claudecode")) {
       console.log(
         pc.dim(`  Restart Claude Code so it reloads ${pc.cyan("~/.claude.json")} and commands.`)
+      );
+    }
+    if (targets.includes("codex")) {
+      console.log(
+        pc.dim(`  Restart Codex so it reloads ${pc.cyan("~/.codex/config.toml")}.`)
       );
     }
   } else {
