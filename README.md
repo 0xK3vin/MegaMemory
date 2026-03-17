@@ -29,7 +29,7 @@ The LLM is the indexer. No AST parsing. No static analysis. Your agent reads cod
 `understand → work → update`
 
 1. **Session start** — agent calls `list_roots` to orient itself
-2. **Before a task** — agent calls `understand` with a natural language query
+2. **Before a task** — agent calls `understand` with a natural language query (or `get_concept` for exact ID lookup)
 3. **After a task** — agent calls `create_concept` or `update_concept` to record what it built
 
 Everything persists in a per-project SQLite database at `.megamemory/knowledge.db`.
@@ -119,6 +119,7 @@ Add megamemory as a stdio MCP server. The command is just `megamemory` (no argum
 | Tool | Description |
 |------|-------------|
 | `understand` | Semantic search over the knowledge graph. Returns matched concepts with children, edges, and parent context. |
+| `get_concept` | Look up a concept by its exact ID. Returns full context including children, edges, incoming edges, and parent. |
 | `create_concept` | Add a new concept with optional edges and file references. |
 | `update_concept` | Update fields on an existing concept. Regenerates embeddings automatically. |
 | `link` | Create a typed relationship between two concepts. |
@@ -167,8 +168,8 @@ megamemory serve --port 8080   # custom port
 
 ```
 src/
-  index.ts       CLI entry + MCP server (8 tools)
-  tools.ts       Tool handlers (understand, create, update, link, remove, list_conflicts, resolve_conflict)
+  index.ts       CLI entry + MCP server (9 tools)
+  tools.ts       Tool handlers (understand, get_concept, create, update, link, remove, list_conflicts, resolve_conflict)
   db.ts          SQLite persistence (libsql, WAL mode, schema v3)
   embeddings.ts  In-process embeddings (all-MiniLM-L6-v2, 384 dims)
   merge.ts       Two-way merge engine for knowledge.db files

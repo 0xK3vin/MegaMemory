@@ -154,7 +154,7 @@ async function startMcpServer() {
   const { z } = await import("zod");
   const path = await import("path");
   const { KnowledgeDB } = await import("./db.js");
-  const { understand, createConcept, updateConcept, link, removeConcept, listRoots, listConflicts, resolveConflict, formatError } =
+  const { understand, getConcept, createConcept, updateConcept, link, removeConcept, listRoots, listConflicts, resolveConflict, formatError } =
     await import("./tools.js");
 
   type NodeKind = import("./types.js").NodeKind;
@@ -225,6 +225,38 @@ async function startMcpServer() {
         timeline.log({
           tool: "understand",
           params: { query: params.query, top_k: params.top_k },
+          result_summary: err instanceof Error ? err.message : String(err),
+          is_write: false,
+          is_error: true,
+          affected_ids: [],
+        });
+        return formatError(err);
+      }
+    }
+  );
+
+  server.tool(
+    "get_concept",
+    "Look up a concept by its exact ID. Returns the concept with its full context including children, edges, incoming edges, and parent. Unlike 'understand' which uses semantic search, this does exact ID matching. Use this when you know the specific concept ID.",
+    {
+      id: z.string().describe("Exact concept ID to look up (e.g., 'chapter-03-main-c-god-object-split')"),
+    },
+    async (params) => {
+      try {
+        const result = getConcept(db, { id: params.id });
+        timeline.log({
+          tool: "get_concept",
+          params: { id: params.id },
+          result_summary: `found ${result.id}`,
+          is_write: false,
+          is_error: false,
+          affected_ids: [result.id],
+        });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        timeline.log({
+          tool: "get_concept",
+          params: { id: params.id },
           result_summary: err instanceof Error ? err.message : String(err),
           is_write: false,
           is_error: true,
