@@ -79,6 +79,14 @@ describe("getConcept tool", () => {
     db.close();
   });
 
+  it("throws for empty string ID", () => {
+    const { db } = createTmpDb("empty-id.db");
+
+    expect(() => getConcept(db, { id: "" })).toThrow(/not found/);
+
+    db.close();
+  });
+
   it("throws for soft-deleted nodes", () => {
     const { db } = createTmpDb("deleted.db");
     insertTestNode(db, "doomed-node");

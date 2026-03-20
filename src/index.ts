@@ -239,7 +239,7 @@ async function startMcpServer() {
     "get_concept",
     "Look up a concept by its exact ID. Returns the concept with its full context including children, edges, incoming edges, and parent. Unlike 'understand' which uses semantic search, this does exact ID matching. Use this when you know the specific concept ID.",
     {
-      id: z.string().describe("Exact concept ID to look up (e.g., 'chapter-03-main-c-god-object-split')"),
+      id: z.string().describe("Exact concept ID to look up (e.g., 'auth-module' or 'database-config')"),
     },
     async (params) => {
       try {
