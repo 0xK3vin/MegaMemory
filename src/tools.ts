@@ -2,6 +2,7 @@ import { KnowledgeDB } from "./db.js";
 import { embed, embeddingText, findTopK } from "./embeddings.js";
 import type {
   UnderstandInput,
+  GetConceptInput,
   CreateConceptInput,
   UpdateConceptInput,
   LinkInput,
@@ -133,6 +134,17 @@ export async function understand(
   }
 
   return { matches };
+}
+
+export function getConcept(
+  db: KnowledgeDB,
+  input: GetConceptInput
+): NodeWithContext {
+  const node = db.getNode(input.id);
+  if (!node) {
+    throw new Error(`Concept "${input.id}" not found.`);
+  }
+  return buildNodeWithContext(db, node);
 }
 
 export async function createConcept(

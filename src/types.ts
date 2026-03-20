@@ -127,6 +127,10 @@ export interface UnderstandOutput {
   matches: NodeWithContext[];
 }
 
+export interface GetConceptInput {
+  id: string;
+}
+
 export interface ListRootsOutput {
   roots: Array<{
     id: string;
