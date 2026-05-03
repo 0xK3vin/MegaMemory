@@ -151,7 +151,8 @@ export async function createConcept(
   db: KnowledgeDB,
   input: CreateConceptInput
 ): Promise<{ id: string; message: string }> {
-  const id = makeId(input.name, input.parent_id);
+  const parentId = input.parent_id === "" ? undefined : input.parent_id;
+  const id = makeId(input.name, parentId);
 
   // Check if node already exists
   if (db.nodeExists(id)) {
@@ -159,8 +160,8 @@ export async function createConcept(
   }
 
   // Validate parent exists if specified
-  if (input.parent_id && !db.nodeExists(input.parent_id)) {
-    throw new Error(`Parent concept "${input.parent_id}" does not exist.`);
+  if (parentId && !db.nodeExists(parentId)) {
+    throw new Error(`Parent concept "${parentId}" does not exist.`);
   }
 
   // Generate embedding
@@ -175,7 +176,7 @@ export async function createConcept(
       summary: input.summary,
       why: input.why ?? null,
       file_refs: input.file_refs ? JSON.stringify(input.file_refs) : null,
-      parent_id: input.parent_id ?? null,
+      parent_id: parentId ?? null,
       created_by_task: input.created_by_task ?? null,
       embedding,
     },

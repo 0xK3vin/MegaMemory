@@ -275,7 +275,7 @@ async function startMcpServer() {
       kind: NodeKindEnum.describe("Type of concept: feature, module, pattern, config, decision, component"),
       summary: z.string().describe("What this concept is. Be specific: include parameter names, defaults, file paths, behavior details."),
       why: z.string().optional().describe("Why this exists or was built this way"),
-      parent_id: z.string().optional().describe("Parent concept ID for nesting"),
+      parent_id: z.string().optional().describe("Parent concept ID for nesting; empty string is treated as omitted"),
       file_refs: z.array(z.string()).optional().describe("Relevant file paths + optional line ranges"),
       edges: z.array(z.object({
         to: z.string().describe("Target concept ID"),
