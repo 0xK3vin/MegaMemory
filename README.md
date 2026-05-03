@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/0xk3vin-megamemory-badge.png)](https://mseep.ai/app/0xk3vin-megamemory)
+
 <p align="center">
   <h1 align="center">MegaMemory</h1>
 </p>
