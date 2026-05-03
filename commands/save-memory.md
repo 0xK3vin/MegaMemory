@@ -1,3 +1,4 @@
+<!-- MegaMemory-managed file. Safe for megamemory install to update. -->
 # Save Session Knowledge
 
 You are saving what you learned this session into the megamemory knowledge graph.

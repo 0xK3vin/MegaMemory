@@ -1,3 +1,4 @@
+<!-- MegaMemory-managed file. Safe for megamemory install to update. -->
 # Bootstrap Project Knowledge Graph
 
 RUN { git ls-files; git ls-files --others --exclude-standard; } 2>/dev/null | sort -u | xargs wc -l 2>/dev/null | sort -rn | head -150

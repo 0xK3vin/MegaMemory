@@ -1,3 +1,4 @@
+// MegaMemory-managed file. Safe for megamemory install to update.
 import { tool } from "@opencode-ai/plugin";
 
 const SKILL = `

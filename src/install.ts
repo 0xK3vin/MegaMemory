@@ -10,7 +10,7 @@ export type InstallTarget = "opencode" | "claudecode" | "antigravity" | "codex";
 interface TargetConfig {
   label: string;
   description: string;
-  steps: Array<{ name: string; run: () => Promise<void> | void }>;
+  steps: Array<{ name: string; critical?: boolean; run: () => Promise<void> | void }>;
 }
 
 interface StepResult {
@@ -50,6 +50,7 @@ const CODEX_CONFIG_PATH = path.join(CODEX_DIR, "config.toml");
 const CODEX_AGENTS_MD_PATH = path.join(CODEX_DIR, "AGENTS.md");
 
 const AGENTS_MD_MARKER = "## Project Knowledge Graph";
+const MANAGED_FILE_MARKER = "MegaMemory-managed file. Safe for megamemory install to update.";
 
 const AGENTS_MD_SNIPPET = `
 ## Project Knowledge Graph
@@ -140,6 +141,43 @@ function stripJsonComments(text: string): string {
 
 function parseJsonc(text: string): unknown {
   return JSON.parse(stripJsonComments(text));
+}
+
+function formatConfigReadError(filePath: string, reason: string): Error {
+  return new Error(
+    `Could not safely update ${filePath}: ${reason}. Left the existing file unchanged.`
+  );
+}
+
+function readJsonConfigForMerge(
+  filePath: string,
+  nestedKey: string
+): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseJsonc(fs.readFileSync(filePath, "utf-8"));
+  } catch (err) {
+    const reason = err instanceof Error ? `could not parse JSON (${err.message})` : "could not parse JSON";
+    throw formatConfigReadError(filePath, reason);
+  }
+
+  if (!isObject(parsed)) {
+    throw formatConfigReadError(filePath, "top-level JSON value is not an object");
+  }
+
+  if (nestedKey in parsed && !isObject(parsed[nestedKey])) {
+    throw formatConfigReadError(filePath, `'${nestedKey}' is present but is not an object`);
+  }
+
+  return parsed;
+}
+
+function isManagedInstallFile(content: string): boolean {
+  return content.includes(MANAGED_FILE_MARKER);
 }
 
 function resolveServerEntryPoint(): string {
@@ -245,6 +283,14 @@ function setupToolPlugin(): void {
       skip(`Tool plugin already up to date`);
       return;
     }
+
+    if (!isManagedInstallFile(existing)) {
+      warn(
+        `Existing tool plugin at ${pc.dim(dest)} is not marked as MegaMemory-managed. Left it untouched.`
+      );
+      return;
+    }
+
     fs.writeFileSync(dest, sourceContent);
     success(`Updated tool plugin at ${pc.dim(dest)}`);
     return;
@@ -273,6 +319,12 @@ function setupCommand(destinationDir: string, filename: string, label: string): 
       skip(`${label} already up to date`);
       return;
     }
+
+    if (!isManagedInstallFile(existing)) {
+      warn(`Existing ${label} at ${pc.dim(dest)} is not marked as MegaMemory-managed. Left it untouched.`);
+      return;
+    }
+
     fs.writeFileSync(dest, sourceContent);
     success(`Updated ${label} at ${pc.dim(dest)}`);
     return;
@@ -285,19 +337,7 @@ function setupCommand(destinationDir: string, filename: string, label: string): 
 async function setupOpencodeMcpConfig(runtime: CommandRuntime): Promise<void> {
   fs.mkdirSync(OPENCODE_CONFIG_DIR, { recursive: true });
 
-  let config: Record<string, unknown> = {};
-  if (fs.existsSync(OPENCODE_CONFIG_PATH)) {
-    try {
-      const parsed = parseJsonc(fs.readFileSync(OPENCODE_CONFIG_PATH, "utf-8"));
-      config = isObject(parsed) ? parsed : {};
-    } catch {
-      const backup = `${OPENCODE_CONFIG_PATH}.bak`;
-      fs.copyFileSync(OPENCODE_CONFIG_PATH, backup);
-      warn(`Could not parse ${pc.dim(OPENCODE_CONFIG_PATH)}; backed it up to ${pc.dim(backup)}.`);
-      warn("Created a fresh config with only the megamemory entry. Merge your old settings from the backup if needed.");
-      config = {};
-    }
-  }
+  const config = readJsonConfigForMerge(OPENCODE_CONFIG_PATH, "mcp");
 
   if (!config["$schema"]) {
     config["$schema"] = "https://opencode.ai/config.json";
@@ -324,27 +364,7 @@ async function setupOpencodeMcpConfig(runtime: CommandRuntime): Promise<void> {
 }
 
 async function setupClaudeConfig(runtime: CommandRuntime): Promise<void> {
-  let config: Record<string, unknown> = {};
-
-  if (fs.existsSync(CLAUDE_CONFIG_PATH)) {
-    try {
-      const parsed = parseJsonc(fs.readFileSync(CLAUDE_CONFIG_PATH, "utf-8"));
-      if (!isObject(parsed)) {
-        throw new Error("Top-level JSON value is not an object");
-      }
-      config = parsed;
-    } catch (err) {
-      const backup = `${CLAUDE_CONFIG_PATH}.bak`;
-      fs.copyFileSync(CLAUDE_CONFIG_PATH, backup);
-      warn(`Could not parse ${pc.dim(CLAUDE_CONFIG_PATH)}; backed it up to ${pc.dim(backup)}.`);
-      warn("Created a fresh config with only the megamemory entry. Merge your old settings from the backup if needed.");
-      throw new Error(
-        err instanceof Error
-          ? `Could not parse ${CLAUDE_CONFIG_PATH}: ${err.message}`
-          : `Could not parse ${CLAUDE_CONFIG_PATH}`
-      );
-    }
-  }
+  const config = readJsonConfigForMerge(CLAUDE_CONFIG_PATH, "mcpServers");
 
   const mcpServers = isObject(config["mcpServers"]) ? config["mcpServers"] : {};
   const existed = "megamemory" in mcpServers;
@@ -367,20 +387,7 @@ async function setupClaudeConfig(runtime: CommandRuntime): Promise<void> {
 }
 
 async function setupAntigravityConfig(runtime: CommandRuntime): Promise<void> {
-  let config: Record<string, unknown> = {};
-
-  if (fs.existsSync(ANTIGRAVITY_CONFIG_PATH)) {
-    try {
-      const parsed = parseJsonc(fs.readFileSync(ANTIGRAVITY_CONFIG_PATH, "utf-8"));
-      config = isObject(parsed) ? parsed : {};
-    } catch {
-      const backup = `${ANTIGRAVITY_CONFIG_PATH}.bak`;
-      fs.copyFileSync(ANTIGRAVITY_CONFIG_PATH, backup);
-      warn(`Could not parse ${pc.dim(ANTIGRAVITY_CONFIG_PATH)}; backed it up to ${pc.dim(backup)}.`);
-      warn("Created a fresh config with only the megamemory entry. Merge your old settings from the backup if needed.");
-      config = {};
-    }
-  }
+  const config = readJsonConfigForMerge(ANTIGRAVITY_CONFIG_PATH, "mcpServers");
 
   const mcpServers = isObject(config["mcpServers"]) ? config["mcpServers"] : {};
   const existed = "megamemory" in mcpServers;
@@ -495,7 +502,7 @@ function createTargetConfigs(runtime: CommandRuntime): Record<InstallTarget, Tar
       label: "opencode",
       description: "MCP server, AGENTS.md, skill plugin, commands",
       steps: [
-        { name: "MCP server config", run: () => setupOpencodeMcpConfig(runtime) },
+        { name: "MCP server config", critical: true, run: () => setupOpencodeMcpConfig(runtime) },
         { name: "Global AGENTS.md", run: () => setupInstructionFile(OPENCODE_AGENTS_MD_PATH) },
         { name: "Skill tool plugin", run: () => setupToolPlugin() },
         {
@@ -512,7 +519,7 @@ function createTargetConfigs(runtime: CommandRuntime): Record<InstallTarget, Tar
       label: "Claude Code",
       description: "MCP server, CLAUDE.md, commands",
       steps: [
-        { name: "MCP server config", run: () => setupClaudeConfig(runtime) },
+        { name: "MCP server config", critical: true, run: () => setupClaudeConfig(runtime) },
         { name: "Global CLAUDE.md", run: () => setupInstructionFile(CLAUDE_MD_PATH) },
         {
           name: "Bootstrap command",
@@ -528,14 +535,14 @@ function createTargetConfigs(runtime: CommandRuntime): Record<InstallTarget, Tar
       label: "Antigravity",
       description: "MCP server config (workspace-level)",
       steps: [
-        { name: "MCP server config", run: () => setupAntigravityConfig(runtime) },
+        { name: "MCP server config", critical: true, run: () => setupAntigravityConfig(runtime) },
       ],
     },
     codex: {
       label: "Codex",
       description: "MCP server, AGENTS.md",
       steps: [
-        { name: "MCP server config", run: () => setupCodexConfig(runtime) },
+        { name: "MCP server config", critical: true, run: () => setupCodexConfig(runtime) },
         { name: "Global AGENTS.md", run: () => setupInstructionFile(CODEX_AGENTS_MD_PATH) },
       ],
     },
@@ -670,6 +677,11 @@ export async function runInstall(args: string[]): Promise<void> {
           ok: false,
           error: msg,
         });
+
+        if (step.critical) {
+          warn(`Skipping remaining ${targetConfig.label} steps because ${step.name} failed.`);
+          break;
+        }
       }
       console.log();
     }

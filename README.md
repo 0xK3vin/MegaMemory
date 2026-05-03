@@ -53,6 +53,9 @@ megamemory install
 
 Run the interactive installer and choose your editor:
 
+> [!NOTE]
+> The installer only updates config files after a successful read/merge, and it will not overwrite existing plugin/command files unless they are already marked as MegaMemory-managed.
+
 #### With [opencode](https://opencode.ai)
 
 ```bash
